@@ -1,0 +1,741 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  owner
+  admin
+  financeiro
+  vendedor
+  caixa
+  estoque
+  visualizador
+}
+
+enum MemberStatus {
+  ativo
+  convidado
+  inativo
+}
+
+enum Plan {
+  starter
+  professional
+  business
+}
+
+model User {
+  id             String    @id @default(cuid())
+  name           String
+  email          String    @unique 
+  passwordHash   String? 
+  failedAttempts Int       @default(0)
+  lockedUntil    DateTime?
+  lastAccessAt   DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  memberships    Membership[]
+  sessions       Session[]
+  tokens         AuthToken[]
+  auditLogs      AuditLog[]
+  stockMovements StockMovement[]
+  sales          Sale[]
+  cashSessions   CashSession[]
+  cashMovements  CashMovement[]
+}
+
+model Organization {
+  id        String   @id @default(cuid())
+  name      String
+  cnpj      String   @default("")
+  email     String   @default("")
+  phone     String   @default("")
+  address   String   @default("")
+  city      String   @default("")
+  state     String   @default("")
+  segment   String   @default("")
+  plan      Plan     @default(starter)
+  onboarded Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  subscriptionStatus SubscriptionStatus @default(trial)
+  trialEndsAt        DateTime?
+  renewsAt           DateTime?
+  cancelAtPeriodEnd  Boolean            @default(false)
+
+  accounts               Account[]
+  financeCategories      FinanceCategory[]
+  financeEntries         FinanceEntry[]
+  transactions           Transaction[]
+  notifications          Notification[]
+  automations            Automation[]
+  fiscalSettings         FiscalSettings?
+  fiscalNotes            FiscalNote[]
+  pixSettings            PixSettings?
+  pixCharges             PixCharge[]
+  bankConnections        BankConnection[]
+  bankLines              BankLine[]
+  marketplaceConnections MarketplaceConnection[]
+  marketplaceOrders      MarketplaceOrder[]
+  productListings        ProductListing[]
+  memberships            Membership[]
+  products               Product[]
+  customers              Customer[]
+  sales                  Sale[]
+  stockMovements         StockMovement[]
+  auditLogs              AuditLog[]
+  counters               Counter[]
+  cashSessions           CashSession[]
+  cashMovements          CashMovement[]
+}
+
+model Membership {
+  id             String       @id @default(cuid())
+  userId         String
+  organizationId String
+  role           Role
+  status         MemberStatus @default(ativo)
+  createdAt      DateTime     @default(now())
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, organizationId])
+  @@index([organizationId])
+}
+
+model Session {
+  id         String   @id @default(cuid())
+  userId     String
+  tokenHash  String   @unique
+  userAgent  String   @default("")
+  ip         String   @default("")
+  createdAt  DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+  expiresAt  DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+enum TokenType {
+  password_reset
+  invite
+}
+
+model AuthToken {
+  id             String    @id @default(cuid())
+  userId         String
+  type           TokenType
+  tokenHash      String    @unique
+  organizationId String? 
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, type])
+}
+
+enum ActiveStatus {
+  ativo
+  inativo
+}
+
+model Product {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  sku            String
+  barcode        String       @default("")
+  category       String       @default("")
+  supplier       String       @default("")
+  image          String?
+  price          Decimal      @db.Decimal(14, 2)
+  cost           Decimal      @default(0) @db.Decimal(14, 2)
+  stock          Int          @default(0)
+  minStock       Int          @default(0)
+  status         ActiveStatus @default(ativo)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  saleItems    SaleItem[]
+  movements    StockMovement[]
+  listings     ProductListing[]
+
+  @@unique([organizationId, sku])
+  @@index([organizationId, name])
+  @@index([organizationId, barcode])
+}
+
+model Customer {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  document       String       @default("")
+  phone          String       @default("")
+  email          String       @default("")
+  notes          String       @default("")
+  status         ActiveStatus @default(ativo)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+  deletedAt      DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sales        Sale[]
+
+  @@index([organizationId, name])
+}
+
+enum PaymentMethod {
+  dinheiro
+  pix
+  debito
+  credito
+  boleto
+  outros
+}
+
+enum SaleStatus {
+  concluida
+  pendente
+  cancelada
+}
+
+enum SaleOrigin {
+  pdv
+  manual
+}
+
+model Sale {
+  id             String        @id @default(cuid())
+  organizationId String
+  number         Int 
+  customerId     String?
+  userId         String?
+  origin         SaleOrigin    @default(manual)
+  status         SaleStatus    @default(pendente)
+  payment        PaymentMethod @default(outros)
+  installments   Int           @default(1)
+  subtotal       Decimal       @db.Decimal(14, 2)
+  discount       Decimal       @default(0) @db.Decimal(14, 2)
+  shipping       Decimal       @default(0) @db.Decimal(14, 2)
+  total          Decimal       @db.Decimal(14, 2)
+  register       String?
+  cashSessionId  String?
+  cancelledAt    DateTime?
+  createdAt      DateTime      @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+  cashSession  CashSession?  @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  items        SaleItem[]
+  payments     SalePayment[]
+  fiscalNotes  FiscalNote[]
+  transactions Transaction[]
+
+  @@unique([organizationId, number])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, status])
+  @@index([cashSessionId])
+}
+
+model SaleItem {
+  id        String  @id @default(cuid())
+  saleId    String
+  productId String
+  name      String 
+  qty       Int
+  unitPrice Decimal @db.Decimal(14, 2)
+  discount  Decimal @default(0) @db.Decimal(14, 2)
+  total     Decimal @db.Decimal(14, 2)
+
+  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id])
+
+  @@index([saleId])
+}
+
+model SalePayment {
+  id           String        @id @default(cuid())
+  saleId       String
+  method       PaymentMethod
+  amount       Decimal       @db.Decimal(14, 2)
+  installments Int           @default(1)
+
+  sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
+
+  @@index([saleId])
+}
+
+enum MovementType {
+  entrada
+  saida
+  ajuste
+}
+
+model StockMovement {
+  id             String       @id @default(cuid())
+  organizationId String
+  productId      String
+  userId         String?
+  type           MovementType
+  quantity       Int
+  reason         String       @default("")
+  createdAt      DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product      Product      @relation(fields: [productId], references: [id])
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([productId])
+}
+
+enum CashSessionStatus {
+  aberto
+  fechado
+}
+
+enum CashMovementType {
+  sangria 
+  suprimento 
+}
+
+model CashSession {
+  id             String            @id @default(cuid())
+  organizationId String
+  userId         String
+  register       String 
+  status         CashSessionStatus @default(aberto)
+  initial        Decimal           @db.Decimal(14, 2)
+  openedAt       DateTime          @default(now())
+  closedAt       DateTime?
+  expected       Decimal?          @db.Decimal(14, 2) 
+  counted        Decimal?          @db.Decimal(14, 2) 
+  notes          String            @default("")
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User           @relation(fields: [userId], references: [id])
+  movements    CashMovement[]
+  sales        Sale[]
+
+  @@index([organizationId, status])
+  @@index([userId, status])
+}
+
+model CashMovement {
+  id             String           @id @default(cuid())
+  organizationId String
+  sessionId      String
+  userId         String
+  type           CashMovementType
+  amount         Decimal          @db.Decimal(14, 2)
+  reason         String
+  notes          String           @default("")
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  session      CashSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id])
+
+  @@index([sessionId])
+}
+
+model Counter {
+  organizationId String
+  key            String
+  value          Int    @default(0)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, key])
+}
+
+model AuditLog {
+  id             String   @id @default(cuid())
+  organizationId String?
+  userId         String?
+  action         String
+  entity         String   @default("")
+  entityId       String   @default("")
+  text           String
+  ip             String   @default("")
+  createdAt      DateTime @default(now())
+
+  organization Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+}
+
+enum SubscriptionStatus {
+  trial
+  active
+  cancelled
+}
+
+enum AccountType {
+  banco
+  caixa
+  carteira
+  investimento
+}
+
+model Account {
+  id             String      @id @default(cuid())
+  organizationId String
+  name           String
+  type           AccountType
+  openingBalance Decimal     @default(0) @db.Decimal(14, 2)
+  active         Boolean     @default(true)
+  createdAt      DateTime    @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@unique([organizationId, name])
+}
+
+enum CategoryType {
+  receita
+  despesa
+}
+
+model FinanceCategory {
+  id             String       @id @default(cuid())
+  organizationId String
+  name           String
+  type           CategoryType
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, name])
+}
+
+enum EntryKind {
+  pagar
+  receber
+}
+
+enum EntryStatus {
+  pendente
+  liquidado
+  cancelado
+}
+
+model FinanceEntry {
+  id             String      @id @default(cuid())
+  organizationId String
+  kind           EntryKind
+  party          String
+  description    String
+  category       String      @default("")
+  amount         Decimal     @db.Decimal(14, 2)
+  dueDate        DateTime    @db.Date
+  method         String      @default("")
+  status         EntryStatus @default(pendente)
+  settledAt      DateTime?
+  createdAt      DateTime    @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@index([organizationId, kind, status])
+  @@index([organizationId, dueDate])
+}
+
+enum TxType {
+  entrada
+  saida
+}
+
+enum TxStatus {
+  confirmada
+  pendente
+}
+
+model Transaction {
+  id             String   @id @default(cuid())
+  organizationId String
+  accountId      String
+  date           DateTime @db.Date
+  type           TxType
+  description    String
+  category       String   @default("")
+  amount         Decimal  @db.Decimal(14, 2)
+  status         TxStatus @default(confirmada)
+  entryId        String?
+  saleId         String?
+  pixChargeId    String?
+  createdAt      DateTime @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  account      Account       @relation(fields: [accountId], references: [id])
+  entry        FinanceEntry? @relation(fields: [entryId], references: [id], onDelete: SetNull)
+  sale         Sale?         @relation(fields: [saleId], references: [id], onDelete: SetNull)
+  bankLine     BankLine?
+
+  @@index([organizationId, date])
+  @@index([accountId])
+}
+
+model Notification {
+  id             String   @id @default(cuid())
+  organizationId String
+  category       String 
+  title          String
+  body           String   @default("")
+  readBy         String[] @default([]) 
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, createdAt])
+}
+
+enum AutomationStatus {
+  ativa
+  pausada
+  erro
+}
+
+model Automation {
+  id             String           @id @default(cuid())
+  organizationId String
+  name           String
+  trigger        String
+  condition      String           @default("Sempre")
+  action         String
+  status         AutomationStatus @default(ativa)
+  lastRunAt      DateTime?
+  runs           Int              @default(0)
+  createdAt      DateTime         @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+}
+
+enum FiscalEnvironment {
+  homologacao
+  producao
+}
+
+enum TaxRegime {
+  simples
+  presumido
+  real
+}
+
+model FiscalSettings {
+  organizationId String            @id
+  environment    FiscalEnvironment @default(homologacao)
+  regime         TaxRegime         @default(simples)
+  nfeSeries      String            @default("1")
+  nfceSeries     String            @default("1")
+  cscId          String            @default("")
+  cscTokenEnc    String            @default("")
+  certName       String?
+  certExpiresAt  DateTime?         @db.Date
+  updatedAt      DateTime          @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+enum FiscalType {
+  nfe
+  nfce
+}
+
+enum FiscalStatus {
+  autorizada
+  pendente
+  rejeitada
+  cancelada
+}
+
+model FiscalNote {
+  id             String       @id @default(cuid())
+  organizationId String
+  saleId         String
+  type           FiscalType
+  number         Int
+  series         String       @default("1")
+  key            String
+  protocol       String?
+  status         FiscalStatus @default(pendente)
+  rejectReason   String?
+  total          Decimal      @db.Decimal(14, 2)
+  customerName   String       @default("")
+  issuedAt       DateTime     @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sale         Sale         @relation(fields: [saleId], references: [id])
+
+  @@unique([organizationId, type, series, number])
+  @@index([organizationId, status])
+  @@index([saleId])
+}
+
+enum PixKeyType {
+  cnpj
+  email
+  telefone
+  aleatoria
+}
+
+model PixSettings {
+  organizationId String     @id
+  key            String     @default("")
+  keyType        PixKeyType @default(cnpj)
+  merchantName   String     @default("")
+  city           String     @default("")
+  updatedAt      DateTime   @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+enum PixStatus {
+  ativa
+  paga
+  expirada
+  cancelada
+}
+
+model PixCharge {
+  id             String    @id @default(cuid())
+  organizationId String
+  txid           String
+  description    String
+  customerName   String    @default("")
+  amount         Decimal   @db.Decimal(14, 2)
+  payload        String
+  status         PixStatus @default(ativa)
+  expiresAt      DateTime
+  paidAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, txid])
+  @@index([organizationId, status])
+}
+
+model BankConnection {
+  id             String    @id @default(cuid())
+  organizationId String
+  bank           String
+  account        String    @default("")
+  connected      Boolean   @default(false)
+  lastSyncAt     DateTime?
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  lines        BankLine[]
+
+  @@unique([organizationId, bank])
+}
+
+enum BankLineStatus {
+  pendente
+  conciliado
+  ignorado
+}
+
+model BankLine {
+  id                     String         @id @default(cuid())
+  organizationId         String
+  connectionId           String?
+  date                   DateTime       @db.Date
+  description            String
+  amount                 Decimal        @db.Decimal(14, 2) 
+  status                 BankLineStatus @default(pendente)
+  matchText              String?
+  transactionId          String?        @unique 
+  suggestedTransactionId String?
+  suggestionScore        Int?
+  externalId             String? 
+  createdAt              DateTime       @default(now())
+
+  organization Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  connection   BankConnection? @relation(fields: [connectionId], references: [id], onDelete: SetNull)
+  transaction  Transaction?    @relation(fields: [transactionId], references: [id], onDelete: SetNull)
+
+  @@unique([organizationId, externalId])
+  @@index([organizationId, status])
+}
+
+enum Marketplace {
+  mercadolivre
+  shopee
+  amazon
+  magalu
+}
+
+model MarketplaceConnection {
+  id             String      @id @default(cuid())
+  organizationId String
+  marketplace    Marketplace
+  connected      Boolean     @default(false)
+  account        String?
+  lastSyncAt     DateTime?
+  autoStock      Boolean     @default(false)
+  autoOrders     Boolean     @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, marketplace])
+}
+
+enum MarketplaceOrderStatus {
+  novo
+  faturado
+  enviado
+  entregue
+  cancelado
+}
+
+model MarketplaceOrder {
+  id             String                 @id @default(cuid())
+  organizationId String
+  marketplace    Marketplace
+  number         String
+  customerName   String                 @default("")
+  total          Decimal                @db.Decimal(14, 2)
+  status         MarketplaceOrderStatus @default(novo)
+  invoiced       Boolean                @default(false)
+  saleId         String?
+  orderedAt      DateTime               @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, marketplace, number])
+  @@index([organizationId, status])
+}
+
+model ProductListing {
+  id             String      @id @default(cuid())
+  organizationId String
+  productId      String
+  marketplace    Marketplace
+  published      Boolean     @default(false)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  product      Product      @relation(fields: [productId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, marketplace])
+  @@index([organizationId])
+}

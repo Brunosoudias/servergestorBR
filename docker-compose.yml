@@ -1,0 +1,24 @@
+# Nome próprio do projeto: evita colidir com outros projetos Docker cuja pasta também se chama "server".
+name: gestao
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: gestao-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: gestao
+      POSTGRES_PASSWORD: gestao_dev
+      POSTGRES_DB: gestao
+    ports:
+      - "127.0.0.1:5440:5432" # só local: o banco de desenvolvimento não deve ficar exposto na rede
+    volumes:
+      - gestao-pg:/var/lib/postgresql/data
+      - ./docker/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gestao -d gestao"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+volumes:
+  gestao-pg:
