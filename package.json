@@ -2,7 +2,7 @@
   "name": "gestao-api",
   "version": "0.1.0",
   "private": true,
-  "description": "API do Gestão (NestJS + Prisma + PostgreSQL)",
+  "description": "API do Gestor Br (NestJS + Prisma + PostgreSQL)",
   "scripts": {
     "build": "nest build",
     "start": "node dist/main.js",

@@ -18,11 +18,11 @@ export class MailService {
   }
 
   passwordReset(to: string, name: string, token: string) {
-    return this.send(to, "Redefinição de senha", `Olá, ${name}.\n\nPara criar uma nova senha, acesse (válido por 1 hora):\n${this.env.webUrl}/reset-password?token=${token}\n\nSe não foi você, ignore este e-mail.`);
+    return this.send(to, "Gestor Br — redefinição de senha", `Olá, ${name}.\n\nPara criar uma nova senha no Gestor Br, acesse (válido por 1 hora):\n${this.env.webUrl}/reset-password?token=${token}\n\nSe não foi você, ignore este e-mail.`);
   }
 
   invite(to: string, company: string, inviter: string, token: string) {
-    return this.send(to, `Convite para ${company}`, `${inviter} convidou você para acessar ${company}.\n\nDefina sua senha para entrar (válido por 7 dias):\n${this.env.webUrl}/reset-password?token=${token}`);
+    return this.send(to, `Gestor Br — convite para ${company}`, `${inviter} convidou você para acessar ${company} no Gestor Br.\n\nDefina sua senha para entrar (válido por 7 dias):\n${this.env.webUrl}/reset-password?token=${token}`);
   }
 }
 

@@ -16,7 +16,7 @@ export function loadEnv(src: NodeJS.ProcessEnv = process.env) {
       ttlDays: Number(src.SESSION_TTL_DAYS ?? 7),
     },
     smtp: src.SMTP_HOST ? { host: src.SMTP_HOST, port: Number(src.SMTP_PORT ?? 587), user: src.SMTP_USER, pass: src.SMTP_PASS } : null,
-    mailFrom: src.MAIL_FROM ?? "Gestão <nao-responder@localhost>",
+    mailFrom: src.MAIL_FROM ?? "Gestor Br <nao-responder@localhost>",
     trustProxy: bool(src.TRUST_PROXY, prod),
     integrations: (src.INTEGRATIONS_MODE ?? (prod ? "live" : "sandbox")) as "sandbox" | "live",
     secretsKey: src.SECRETS_KEY ?? "",

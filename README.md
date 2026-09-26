@@ -1,4 +1,4 @@
-# Gestão — API
+# Gestor Br — API
 
 NestJS 11 · Prisma 6 · PostgreSQL 16. Multi-tenant (uma API, várias empresas), sessão por cookie `httpOnly`, RBAC por papel.
 
