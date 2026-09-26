@@ -1,8 +1,14 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common";
+import { Type } from "class-transformer";
+import { IsNumber, Max, Min } from "class-validator";
 import type { AuthContext } from "../common/auth-context";
 import { Auth, ClientIp, RequirePermission } from "../common/decorators";
 import { ListQuery } from "../common/pagination";
 import { CustomerDto, CustomersService } from "./customers.service";
+
+export class CreditLimitDto {
+  @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }, { message: "Informe o limite da carteira." }) @Min(0, { message: "O limite não pode ser negativo." }) @Max(99_999_999.99) creditLimit: number;
+}
 
 @Controller("customers")
 export class CustomersController {
@@ -22,4 +28,9 @@ export class CustomersController {
 
   @RequirePermission("customers:create") @Post()
   create(@Auth() ctx: AuthContext, @Body() dto: CustomerDto, @ClientIp() ip: string) { return this.customers.create(ctx, dto, ip); }
+
+  @RequirePermission("customers:credit") @Patch(":id/credit-limit")
+  setCreditLimit(@Auth() ctx: AuthContext, @Param("id") id: string, @Body() dto: CreditLimitDto, @ClientIp() ip: string) {
+    return this.customers.setCreditLimit(ctx, id, dto.creditLimit, ip);
+  }
 }

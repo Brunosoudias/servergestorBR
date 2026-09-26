@@ -1,4 +1,4 @@
-import { Injectable, NotFoundException } from "@nestjs/common";
+import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { Transform, Type } from "class-transformer";
 import { IsEmail, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateIf } from "class-validator";
 import type { Customer, Prisma } from "@prisma/client";
@@ -27,8 +27,26 @@ type Stats = { totalSpent: number; purchases: number; lastPurchase: string; open
 export class CustomersService {
   constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly automations: AutomationsService) {}
 
-  private dto(c: Customer, s?: Stats) {
-    return { id: c.id, name: c.name, document: c.document, phone: c.phone, email: c.email, status: c.status, creditLimit: num(c.creditLimit), creditBalance: num(c.creditBalance), totalSpent: s?.totalSpent ?? 0, purchases: s?.purchases ?? 0, lastPurchase: s?.lastPurchase ?? "", open: s?.open ?? 0 };
+  private dto(c: Customer, s?: Stats, creditOpen = 0) {
+    const creditLimit = num(c.creditLimit);
+    const open = Math.round(creditOpen * 100) / 100;
+    return { id: c.id, name: c.name, document: c.document, phone: c.phone, email: c.email, status: c.status, creditLimit, creditOpen: open, creditAvailable: Math.max(0, Math.round((creditLimit - open) * 100) / 100), creditBalance: num(c.creditBalance), totalSpent: s?.totalSpent ?? 0, purchases: s?.purchases ?? 0, lastPurchase: s?.lastPurchase ?? "", open: s?.open ?? 0 };
+  }
+
+  /** Soma das vendas na carteira que ainda não foram recebidas. */
+  private async walletOpen(orgId: string, ids: string[]) {
+    const map = new Map<string, number>();
+    if (!ids.length) return map;
+    const sales = await this.prisma.sale.findMany({
+      where: { organizationId: orgId, customerId: { in: ids } },
+      select: { customerId: true, financeEntries: { where: { kind: "receber", status: "pendente", method: "fiado" }, select: { amount: true } } },
+    });
+    for (const sale of sales) {
+      if (!sale.customerId) continue;
+      const used = sale.financeEntries.reduce((a, e) => a + num(e.amount), 0);
+      map.set(sale.customerId, (map.get(sale.customerId) ?? 0) + used);
+    }
+    return map;
   }
 
   private async stats(orgId: string, ids: string[]): Promise<Map<string, Stats>> {
@@ -56,13 +74,16 @@ export class CustomersService {
     const orgId = orgOf(ctx);
     const where = { ...this.where(orgId, q.search), ...(q.status && q.status !== "all" ? { status: q.status as never } : {}) };
     const [rows, total] = await Promise.all([this.prisma.customer.findMany({ where, orderBy: { createdAt: "desc" }, ...skipTake(q) }), this.prisma.customer.count({ where })]);
-    const st = await this.stats(orgId, rows.map((r) => r.id));
-    return page(rows.map((c) => this.dto(c, st.get(c.id))), total, q);
+    const ids = rows.map((r) => r.id);
+    const [st, wallet] = await Promise.all([this.stats(orgId, ids), this.walletOpen(orgId, ids)]);
+    return page(rows.map((c) => this.dto(c, st.get(c.id), wallet.get(c.id) ?? 0)), total, q);
   }
 
   async search(ctx: AuthContext, q?: string) {
-    const rows = await this.prisma.customer.findMany({ where: this.where(orgOf(ctx), q?.trim().slice(0, 100)), orderBy: { name: "asc" }, take: 50 });
-    return rows.map((c) => this.dto(c));
+    const orgId = orgOf(ctx);
+    const rows = await this.prisma.customer.findMany({ where: this.where(orgId, q?.trim().slice(0, 100)), orderBy: { name: "asc" }, take: 50 });
+    const wallet = await this.walletOpen(orgId, rows.map((r) => r.id));
+    return rows.map((c) => this.dto(c, undefined, wallet.get(c.id) ?? 0));
   }
 
   private async findOr404(orgId: string, id: string) {
@@ -74,7 +95,8 @@ export class CustomersService {
   async get(ctx: AuthContext, id: string) {
     const orgId = orgOf(ctx);
     const c = await this.findOr404(orgId, id);
-    return this.dto(c, (await this.stats(orgId, [id])).get(id));
+    const [st, wallet] = await Promise.all([this.stats(orgId, [id]), this.walletOpen(orgId, [id])]);
+    return this.dto(c, st.get(id), wallet.get(id) ?? 0);
   }
 
   async purchases(ctx: AuthContext, id: string) {
@@ -86,9 +108,19 @@ export class CustomersService {
 
   async create(ctx: AuthContext, input: CustomerDto, ip: string) {
     const orgId = orgOf(ctx);
+    if ((input.creditLimit ?? 0) > 0 && !ctx.permissions.includes("customers:credit")) throw new ForbiddenException("Você não pode definir o limite da carteira.");
     const c = await this.prisma.customer.create({ data: { organizationId: orgId, name: input.name, document: input.document ?? "", phone: input.phone ?? "", email: input.email ?? "", notes: input.notes ?? "", creditLimit: input.creditLimit ?? 0 } });
     await this.audit.log({ organizationId: orgId, userId: ctx.user.id, action: "customer.create", entity: "customer", entityId: c.id, text: `${ctx.user.name} cadastrou o cliente ${c.name}`, ip });
     await this.automations.fire(orgId, "Novo cliente", { title: `Novo cliente: ${c.name}` });
     return this.dto(c);
+  }
+
+  async setCreditLimit(ctx: AuthContext, id: string, creditLimit: number, ip: string) {
+    const orgId = orgOf(ctx);
+    const current = await this.findOr404(orgId, id);
+    const c = await this.prisma.customer.update({ where: { id: current.id }, data: { creditLimit } });
+    await this.audit.log({ organizationId: orgId, userId: ctx.user.id, action: "customer.credit_limit", entity: "customer", entityId: c.id, text: `${ctx.user.name} definiu o limite da carteira de ${c.name} em R$ ${creditLimit.toFixed(2).replace(".", ",")}`, ip });
+    const [st, wallet] = await Promise.all([this.stats(orgId, [id]), this.walletOpen(orgId, [id])]);
+    return this.dto(c, st.get(id), wallet.get(id) ?? 0);
   }
 }
