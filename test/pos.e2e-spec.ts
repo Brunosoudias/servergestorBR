@@ -148,16 +148,19 @@ describe("PDV e caixa (e2e)", () => {
     await ob.post("/pos/sales").send(saleBody(p.id, { discount: 0, total: 300, payments: [{ method: "dinheiro", amount: 300 }] })).expect(400);
   });
 
-  it("cancelar uma venda do PDV tira o valor do caixa e devolve o estoque", async () => {
+  it("cancelar uma venda do PDV registra o estorno no caixa e devolve o estoque", async () => {
     const { agent, orgId } = await signup();
     const o = withOrg(agent, orgId);
     const p = (await o.post("/products").send(product({ price: 100, stock: 10 })).expect(201)).body;
     await o.post("/pos/register/open").send({ initial: 0 }).expect(201);
     const sale = (await o.post("/pos/sales").send(saleBody(p.id, { discount: 0, total: 300, payments: [{ method: "dinheiro", amount: 300 }] })).expect(201)).body;
     expect((await o.get("/pos/register")).body.cash).toBe(300);
-    await o.post(`/sales/${sale.id}/cancel`).expect(201);
-    expect((await o.get("/pos/register")).body.cash).toBe(0);
+    expect((await o.post(`/sales/${sale.id}/cancel`).expect(409)).body.message).toMatch(/Histórico do PDV/);
+    expect((await o.post(`/pos/sales/${sale.id}/cancel`).send({}).expect(400)).body.message).toBe("Informe o motivo do cancelamento.");
+    await o.post(`/pos/sales/${sale.id}/cancel`).send({ reason: "Cliente desistiu" }).expect(200);
+    expect((await o.get("/pos/register")).body).toMatchObject({ cash: 300, refunds: 300, expected: 0 });
     expect((await o.get(`/products/${p.id}`)).body.stock).toBe(10);
+    expect((await o.get(`/sales/${sale.id}`)).body).toMatchObject({ status: "cancelada", cancelReason: "Cliente desistiu" });
   });
 
   it("corrida: aberturas simultâneas só criam UM caixa; sangrias simultâneas não passam do saldo", async () => {

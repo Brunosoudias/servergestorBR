@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from "@nestjs/common";
-import { Transform } from "class-transformer";
-import { IsEmail, IsOptional, IsString, MaxLength, MinLength, ValidateIf } from "class-validator";
+import { Transform, Type } from "class-transformer";
+import { IsEmail, IsNumber, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateIf } from "class-validator";
 import type { Customer, Prisma } from "@prisma/client";
 import { AuditService } from "../audit/audit.service";
 import { type AuthContext, orgOf } from "../common/auth-context";
@@ -18,6 +18,7 @@ export class CustomerDto {
   @IsOptional() @Transform(trim) @IsString() @MaxLength(30) phone?: string;
   @Transform(({ value }) => (typeof value === "string" ? value.trim().toLowerCase() : value)) @ValidateIf((_o, v) => typeof v === "string" && v.length > 0) @IsEmail({}, { message: "Informe um e-mail válido." }) @MaxLength(160) email?: string;
   @IsOptional() @Transform(trim) @IsString() @MaxLength(1000) notes?: string;
+  @IsOptional() @Type(() => Number) @IsNumber({ maxDecimalPlaces: 2 }) @Min(0) @Max(99_999_999.99) creditLimit?: number;
 }
 
 type Stats = { totalSpent: number; purchases: number; lastPurchase: string; open: number };
@@ -27,7 +28,7 @@ export class CustomersService {
   constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly automations: AutomationsService) {}
 
   private dto(c: Customer, s?: Stats) {
-    return { id: c.id, name: c.name, document: c.document, phone: c.phone, email: c.email, status: c.status, totalSpent: s?.totalSpent ?? 0, purchases: s?.purchases ?? 0, lastPurchase: s?.lastPurchase ?? "", open: s?.open ?? 0 };
+    return { id: c.id, name: c.name, document: c.document, phone: c.phone, email: c.email, status: c.status, creditLimit: num(c.creditLimit), creditBalance: num(c.creditBalance), totalSpent: s?.totalSpent ?? 0, purchases: s?.purchases ?? 0, lastPurchase: s?.lastPurchase ?? "", open: s?.open ?? 0 };
   }
 
   private async stats(orgId: string, ids: string[]): Promise<Map<string, Stats>> {
@@ -85,7 +86,7 @@ export class CustomersService {
 
   async create(ctx: AuthContext, input: CustomerDto, ip: string) {
     const orgId = orgOf(ctx);
-    const c = await this.prisma.customer.create({ data: { organizationId: orgId, name: input.name, document: input.document ?? "", phone: input.phone ?? "", email: input.email ?? "", notes: input.notes ?? "" } });
+    const c = await this.prisma.customer.create({ data: { organizationId: orgId, name: input.name, document: input.document ?? "", phone: input.phone ?? "", email: input.email ?? "", notes: input.notes ?? "", creditLimit: input.creditLimit ?? 0 } });
     await this.audit.log({ organizationId: orgId, userId: ctx.user.id, action: "customer.create", entity: "customer", entityId: c.id, text: `${ctx.user.name} cadastrou o cliente ${c.name}`, ip });
     await this.automations.fire(orgId, "Novo cliente", { title: `Novo cliente: ${c.name}` });
     return this.dto(c);

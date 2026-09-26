@@ -1,6 +1,18 @@
+import { config as loadDotenv } from "dotenv";
+
 const bool = (v: string | undefined, d = false) => (v === undefined || v === "" ? d : ["1", "true", "yes"].includes(v.toLowerCase()));
 
+let dotenvLoaded = false;
+
+/** O Prisma CLI lê `.env` sozinho; o processo do Nest não. Carrega uma vez, sem sobrescrever variáveis já definidas. */
+function ensureDotenv(src: NodeJS.ProcessEnv) {
+  if (dotenvLoaded || src !== process.env) return;
+  dotenvLoaded = true;
+  loadDotenv();
+}
+
 export function loadEnv(src: NodeJS.ProcessEnv = process.env) {
+  ensureDotenv(src);
   const prod = src.NODE_ENV === "production";
   const cfg = {
     prod,

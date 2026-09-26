@@ -11,8 +11,10 @@ enum Role {
   owner
   admin
   financeiro
+  fiscal
   vendedor
   caixa
+  supervisor
   estoque
   visualizador
 }
@@ -94,15 +96,22 @@ model Organization {
   counters               Counter[]
   cashSessions           CashSession[]
   cashMovements          CashMovement[]
+  posTerminals           PosTerminal[]
+  posSettings            PosSettings?
+  paymentMethodConfigs   PaymentMethodConfig[]
+  posAuthorizations      PosAuthorization[]
+  saleReturns            SaleReturn[]
+  customerCredits        CustomerCreditMovement[]
 }
 
 model Membership {
   id             String       @id @default(cuid())
   userId         String
   organizationId String
-  role           Role
-  status         MemberStatus @default(ativo)
-  createdAt      DateTime     @default(now())
+  role             Role
+  status           MemberStatus @default(ativo)
+  extraPermissions String[]     @default([])
+  createdAt        DateTime     @default(now())
 
   user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
@@ -163,8 +172,16 @@ model Product {
   image          String?
   price          Decimal      @db.Decimal(14, 2)
   cost           Decimal      @default(0) @db.Decimal(14, 2)
-  stock          Int          @default(0)
-  minStock       Int          @default(0)
+  stock          Decimal      @default(0) @db.Decimal(14, 3)
+  minStock       Decimal      @default(0) @db.Decimal(14, 3)
+  unit           String       @default("UN")
+  fractional     Boolean      @default(false)
+  ncm            String       @default("")
+  cest           String       @default("")
+  cfop           String       @default("")
+  origin         Int          @default(0)
+  cst            String       @default("")
+  taxableUnit    String       @default("")
   status         ActiveStatus @default(ativo)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
@@ -188,13 +205,16 @@ model Customer {
   phone          String       @default("")
   email          String       @default("")
   notes          String       @default("")
+  creditBalance  Decimal      @default(0) @db.Decimal(14, 2)
+  creditLimit    Decimal      @default(0) @db.Decimal(14, 2)
   status         ActiveStatus @default(ativo)
   createdAt      DateTime     @default(now())
   updatedAt      DateTime     @updatedAt
   deletedAt      DateTime?
 
-  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  sales        Sale[]
+  organization  Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sales         Sale[]
+  creditHistory CustomerCreditMovement[]
 
   @@index([organizationId, name])
 }
@@ -206,6 +226,13 @@ enum PaymentMethod {
   credito
   boleto
   outros
+  credito_cliente
+  fiado
+}
+
+enum PaymentStatus {
+  pendente
+  confirmado
 }
 
 enum SaleStatus {
@@ -236,18 +263,27 @@ model Sale {
   register       String?
   cashSessionId  String?
   cancelledAt    DateTime?
+  cancelReason   String?
+  cancelledById  String?
+  approvedById   String?
+  requestId      String?
+  document       String        @default("")
   createdAt      DateTime      @default(now())
 
-  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  customer     Customer?     @relation(fields: [customerId], references: [id], onDelete: SetNull)
-  user         User?         @relation(fields: [userId], references: [id], onDelete: SetNull)
-  cashSession  CashSession?  @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
-  items        SaleItem[]
-  payments     SalePayment[]
-  fiscalNotes  FiscalNote[]
-  transactions Transaction[]
+  organization   Organization             @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer       Customer?                @relation(fields: [customerId], references: [id], onDelete: SetNull)
+  user           User?                    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  cashSession    CashSession?             @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  items          SaleItem[]
+  payments       SalePayment[]
+  fiscalNotes    FiscalNote[]
+  transactions   Transaction[]
+  financeEntries FinanceEntry[]
+  cashMovements  CashMovement[]
+  returns        SaleReturn[]
 
   @@unique([organizationId, number])
+  @@unique([organizationId, requestId])
   @@index([organizationId, createdAt])
   @@index([organizationId, status])
   @@index([cashSessionId])
@@ -258,23 +294,32 @@ model SaleItem {
   saleId    String
   productId String
   name      String 
-  qty       Int
-  unitPrice Decimal @db.Decimal(14, 2)
-  discount  Decimal @default(0) @db.Decimal(14, 2)
-  total     Decimal @db.Decimal(14, 2)
+  qty         Decimal @db.Decimal(14, 3)
+  unitPrice   Decimal @db.Decimal(14, 2)
+  discount    Decimal @default(0) @db.Decimal(14, 2)
+  total       Decimal @db.Decimal(14, 2)
+  returnedQty Decimal @default(0) @db.Decimal(14, 3)
 
-  sale    Sale    @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  product Product @relation(fields: [productId], references: [id])
+  sale    Sale             @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  product Product          @relation(fields: [productId], references: [id])
+  returns SaleReturnItem[]
 
   @@index([saleId])
 }
 
 model SalePayment {
-  id           String        @id @default(cuid())
-  saleId       String
-  method       PaymentMethod
-  amount       Decimal       @db.Decimal(14, 2)
-  installments Int           @default(1)
+  id                 String         @id @default(cuid())
+  saleId             String
+  method             PaymentMethod
+  amount             Decimal        @db.Decimal(14, 2)
+  installments       Int            @default(1)
+  received           Decimal?       @db.Decimal(14, 2)
+  change             Decimal?       @db.Decimal(14, 2)
+  status             PaymentStatus  @default(confirmado)
+  brand              String?
+  nsu                String?
+  authorizationCode  String?
+  acquirer           String?
 
   sale Sale @relation(fields: [saleId], references: [id], onDelete: Cascade)
 
@@ -293,7 +338,7 @@ model StockMovement {
   productId      String
   userId         String?
   type           MovementType
-  quantity       Int
+  quantity       Decimal      @db.Decimal(14, 3)
   reason         String       @default("")
   createdAt      DateTime     @default(now())
 
@@ -313,28 +358,51 @@ enum CashSessionStatus {
 enum CashMovementType {
   sangria 
   suprimento 
+  estorno
 }
 
 model CashSession {
-  id             String            @id @default(cuid())
-  organizationId String
-  userId         String
-  register       String 
-  status         CashSessionStatus @default(aberto)
-  initial        Decimal           @db.Decimal(14, 2)
-  openedAt       DateTime          @default(now())
-  closedAt       DateTime?
-  expected       Decimal?          @db.Decimal(14, 2) 
-  counted        Decimal?          @db.Decimal(14, 2) 
-  notes          String            @default("")
+  id              String            @id @default(cuid())
+  organizationId  String
+  userId          String
+  register        String 
+  terminalId      String?
+  status          CashSessionStatus @default(aberto)
+  initial         Decimal           @db.Decimal(14, 2)
+  openedAt        DateTime          @default(now())
+  closedAt        DateTime?
+  expected        Decimal?          @db.Decimal(14, 2) 
+  counted         Decimal?          @db.Decimal(14, 2) 
+  float           Decimal?          @db.Decimal(14, 2)
+  collected       Decimal?          @db.Decimal(14, 2)
+  notes           String            @default("")
+  closedById      String?
+  forced          Boolean           @default(false)
+  staleNotifiedAt DateTime?
 
-  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-  user         User           @relation(fields: [userId], references: [id])
+  organization Organization       @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User               @relation(fields: [userId], references: [id])
+  terminal     PosTerminal?       @relation(fields: [terminalId], references: [id], onDelete: SetNull)
   movements    CashMovement[]
   sales        Sale[]
+  counts       CashSessionCount[]
+  returns      SaleReturn[]
 
   @@index([organizationId, status])
   @@index([userId, status])
+  @@index([organizationId, openedAt])
+}
+
+model CashSessionCount {
+  id        String        @id @default(cuid())
+  sessionId String
+  method    PaymentMethod
+  expected  Decimal       @db.Decimal(14, 2)
+  counted   Decimal       @db.Decimal(14, 2)
+
+  session CashSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+
+  @@unique([sessionId, method])
 }
 
 model CashMovement {
@@ -343,16 +411,145 @@ model CashMovement {
   sessionId      String
   userId         String
   type           CashMovementType
+  method         PaymentMethod    @default(dinheiro)
   amount         Decimal          @db.Decimal(14, 2)
   reason         String
   notes          String           @default("")
+  saleId         String?
+  approvedById   String?
   createdAt      DateTime         @default(now())
 
   organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   session      CashSession  @relation(fields: [sessionId], references: [id], onDelete: Cascade)
   user         User         @relation(fields: [userId], references: [id])
+  sale         Sale?        @relation(fields: [saleId], references: [id], onDelete: SetNull)
 
   @@index([sessionId])
+  @@index([saleId])
+}
+
+model PosTerminal {
+  id             String   @id @default(cuid())
+  organizationId String
+  name           String
+  defaultFloat   Decimal  @default(0) @db.Decimal(14, 2)
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sessions     CashSession[]
+
+  @@unique([organizationId, name])
+}
+
+model PosSettings {
+  organizationId          String   @id
+  requireCustomer         Boolean  @default(false)
+  allowNegativeStock      Boolean  @default(false)
+  autoPrint               Boolean  @default(false)
+  beep                    Boolean  @default(true)
+  blindClose              Boolean  @default(false)
+  cancelSameDayOnly       Boolean  @default(false)
+  cashLimit               Decimal? @db.Decimal(14, 2)
+  maxDifference           Decimal  @default(0) @db.Decimal(14, 2)
+  withdrawalApprovalAbove Decimal? @db.Decimal(14, 2)
+  maxOpenHours            Int      @default(14)
+  discountLimits          Json     @default("{}")
+  requireDocumentAbove    Decimal? @db.Decimal(14, 2)
+  blockBelowCost          Boolean  @default(false)
+  moveReasons             String[] @default([])
+  updatedAt               DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+}
+
+model PaymentMethodConfig {
+  organizationId        String
+  method                PaymentMethod
+  accountId             String?
+  feePercent            Decimal       @default(0) @db.Decimal(5, 2)
+  installmentFeePercent Decimal       @default(0) @db.Decimal(5, 2)
+  feeFixed              Decimal       @default(0) @db.Decimal(14, 2)
+  settlementDays        Int           @default(0)
+  enabledInPos          Boolean       @default(true)
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@id([organizationId, method])
+}
+
+model PosAuthorization {
+  id             String    @id @default(cuid())
+  organizationId String
+  supervisorId   String
+  requestedById  String
+  action         String
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, expiresAt])
+}
+
+enum RefundMethod {
+  dinheiro
+  credito_cliente
+  estorno_externo
+}
+
+model SaleReturn {
+  id             String       @id @default(cuid())
+  organizationId String
+  saleId         String
+  number         Int
+  userId         String
+  cashSessionId  String?
+  reason         String
+  refundMethod   RefundMethod
+  total          Decimal      @db.Decimal(14, 2)
+  createdAt      DateTime     @default(now())
+
+  organization Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sale         Sale             @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  cashSession  CashSession?     @relation(fields: [cashSessionId], references: [id], onDelete: SetNull)
+  items        SaleReturnItem[]
+
+  @@unique([organizationId, number])
+  @@index([saleId])
+}
+
+model SaleReturnItem {
+  id         String  @id @default(cuid())
+  returnId   String
+  saleItemId String
+  qty        Decimal @db.Decimal(14, 3)
+  amount     Decimal @db.Decimal(14, 2)
+  restock    Boolean @default(true)
+
+  saleReturn SaleReturn @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  saleItem   SaleItem   @relation(fields: [saleItemId], references: [id], onDelete: Cascade)
+
+  @@index([returnId])
+}
+
+model CustomerCreditMovement {
+  id             String   @id @default(cuid())
+  organizationId String
+  customerId     String
+  type           TxType
+  amount         Decimal  @db.Decimal(14, 2)
+  description    String
+  saleId         String?
+  returnId       String?
+  userId         String?
+  createdAt      DateTime @default(now())
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  customer     Customer     @relation(fields: [customerId], references: [id], onDelete: Cascade)
+
+  @@index([customerId, createdAt])
 }
 
 model Counter {
@@ -449,9 +646,11 @@ model FinanceEntry {
   method         String      @default("")
   status         EntryStatus @default(pendente)
   settledAt      DateTime?
+  saleId         String?
   createdAt      DateTime    @default(now())
 
   organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  sale         Sale?         @relation(fields: [saleId], references: [id], onDelete: SetNull)
   transactions Transaction[]
 
   @@index([organizationId, kind, status])

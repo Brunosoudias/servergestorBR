@@ -1,11 +1,11 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
 import { Transform, Type } from "class-transformer";
 import { IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength } from "class-validator";
-import { type AccountType, type EntryKind, Prisma } from "@prisma/client";
+import { type AccountType, type EntryKind, type PaymentMethod, Prisma } from "@prisma/client";
 import { AuditService } from "../audit/audit.service";
 import { type AuthContext, orgOf } from "../common/auth-context";
 import { lastMonths, todayDate } from "../common/dates";
-import { num } from "../common/money";
+import { cents, fromCents, num } from "../common/money";
 import { type ListQuery, page, skipTake } from "../common/pagination";
 import { AutomationsService } from "../automations/automations.service";
 import { NotificationsService } from "../notifications/notifications.service";
@@ -38,6 +38,18 @@ const ACCOUNT_TYPE_LABEL: Record<AccountType, string> = { banco: "Conta bancári
 
 type Db = Prisma.TransactionClient | PrismaService;
 
+export interface PaymentConfig {
+  method: PaymentMethod; accountId: string | null; feePercent: number; installmentFeePercent: number; feeFixed: number; settlementDays: number; enabledInPos: boolean;
+}
+export const PAYMENT_LABEL: Record<PaymentMethod, string> = {
+  dinheiro: "Dinheiro", pix: "PIX", debito: "Cartão de débito", credito: "Cartão de crédito", boleto: "Boleto", outros: "Outros", credito_cliente: "Crédito do cliente", fiado: "Fiado",
+};
+export const DEFAULT_PAYMENT_CONFIG: Record<PaymentMethod, { settlementDays: number; enabledInPos: boolean }> = {
+  dinheiro: { settlementDays: 0, enabledInPos: true }, pix: { settlementDays: 0, enabledInPos: true }, debito: { settlementDays: 1, enabledInPos: true },
+  credito: { settlementDays: 30, enabledInPos: true }, boleto: { settlementDays: 0, enabledInPos: true }, outros: { settlementDays: 0, enabledInPos: true },
+  credito_cliente: { settlementDays: 0, enabledInPos: true }, fiado: { settlementDays: 30, enabledInPos: true },
+};
+
 @Injectable()
 export class FinanceService {
   constructor(
@@ -63,10 +75,76 @@ export class FinanceService {
     return chosen;
   }
 
-  async recordSale(db: Db, orgId: string, s: { id: string; number: number; total: number; methods: string[] }) {
+  async cashAccount(db: Db, orgId: string) {
     await this.ensureDefaults(orgId, db);
-    const acc = await this.accountFor(db, orgId, s.methods.length > 0 && s.methods.every((m) => m === "dinheiro"));
-    await db.transaction.create({ data: { organizationId: orgId, accountId: acc.id, date: todayDate(), type: "entrada", description: `Venda #${String(s.number).padStart(6, "0")}`, category: "Vendas", amount: s.total, saleId: s.id } });
+    const cash = await db.account.findFirst({ where: { organizationId: orgId, active: true, type: "caixa" }, orderBy: { createdAt: "asc" } });
+    if (cash) return cash;
+    const taken = await db.account.findFirst({ where: { organizationId: orgId, name: "Caixa da Loja" }, select: { id: true } });
+    return db.account.create({ data: { organizationId: orgId, name: taken ? "Caixa do PDV" : "Caixa da Loja", type: "caixa" } });
+  }
+
+  async paymentConfig(db: Db, orgId: string, method: PaymentMethod): Promise<PaymentConfig> {
+    const row = await db.paymentMethodConfig.findUnique({ where: { organizationId_method: { organizationId: orgId, method } } });
+    const d = DEFAULT_PAYMENT_CONFIG[method];
+    if (!row) return { method, accountId: null, feePercent: 0, installmentFeePercent: 0, feeFixed: 0, settlementDays: d.settlementDays, enabledInPos: d.enabledInPos };
+    return { method, accountId: row.accountId, feePercent: num(row.feePercent), installmentFeePercent: num(row.installmentFeePercent), feeFixed: num(row.feeFixed), settlementDays: row.settlementDays, enabledInPos: row.enabledInPos };
+  }
+
+  private async accountForPayment(db: Db, orgId: string, cfg: PaymentConfig) {
+    if (cfg.accountId) {
+      const acc = await db.account.findFirst({ where: { id: cfg.accountId, organizationId: orgId, active: true } });
+      if (acc) return acc;
+    }
+    return cfg.method === "dinheiro" ? this.cashAccount(db, orgId) : this.accountFor(db, orgId, false);
+  }
+
+  static fee(cfg: PaymentConfig, amountCents: number, installments: number) {
+    const pctFee = installments > 1 && cfg.installmentFeePercent > 0 ? cfg.installmentFeePercent : cfg.feePercent;
+    return Math.min(amountCents, Math.round((amountCents * pctFee) / 100) + cents(cfg.feeFixed));
+  }
+
+  async recordSale(db: Db, orgId: string, s: { id: string; number: number; payments: { method: string; amount: number; installments?: number }[] }) {
+    await this.ensureDefaults(orgId, db);
+    const label = `Venda #${String(s.number).padStart(6, "0")}`;
+    const today = todayDate();
+    for (const p of s.payments) {
+      if (p.method === "credito_cliente") continue;
+      const cfg = await this.paymentConfig(db, orgId, p.method as PaymentMethod);
+      const gross = cents(p.amount);
+      const n = Math.max(1, p.installments ?? 1);
+      const fee = FinanceService.fee(cfg, gross, n);
+      const methodLabel = PAYMENT_LABEL[p.method as PaymentMethod] ?? p.method;
+      if (p.method !== "fiado" && cfg.settlementDays <= 0) {
+        const acc = await this.accountForPayment(db, orgId, cfg);
+        await db.transaction.create({ data: { organizationId: orgId, accountId: acc.id, date: today, type: "entrada", description: `${label} — ${methodLabel}`, category: "Vendas", amount: fromCents(gross), saleId: s.id } });
+        if (fee > 0) await db.transaction.create({ data: { organizationId: orgId, accountId: acc.id, date: today, type: "saida", description: `Taxa ${methodLabel} — ${label}`, category: "Taxas de pagamento", amount: fromCents(fee), saleId: s.id } });
+        continue;
+      }
+      const net = gross - fee;
+      const base = Math.floor(net / n);
+      for (let i = 0; i < n; i++) {
+        const part = i === n - 1 ? net - base * (n - 1) : base;
+        const due = new Date(today.getTime() + (cfg.settlementDays + 30 * i) * 86_400_000);
+        await db.financeEntry.create({
+          data: {
+            organizationId: orgId, kind: "receber", party: methodLabel, category: "Vendas", method: p.method, amount: fromCents(part), dueDate: due, saleId: s.id,
+            description: `${label} — ${methodLabel}${n > 1 ? ` ${i + 1}/${n}` : ""}${fee > 0 ? ` (líquido de taxa)` : ""}`,
+          },
+        });
+      }
+    }
+  }
+
+  async transfer(db: Db, orgId: string, m: { fromAccountId?: string | null; toAccountId?: string | null; amount: number; description: string; category: string; saleId?: string }) {
+    await this.ensureDefaults(orgId, db);
+    const check = async (id: string) => {
+      const acc = await db.account.findFirst({ where: { id, organizationId: orgId, active: true } });
+      if (!acc) throw new BadRequestException("Conta financeira não encontrada ou inativa.");
+      return acc;
+    };
+    const date = todayDate();
+    if (m.fromAccountId) await db.transaction.create({ data: { organizationId: orgId, accountId: (await check(m.fromAccountId)).id, date, type: "saida", description: m.description, category: m.category, amount: m.amount, saleId: m.saleId } });
+    if (m.toAccountId) await db.transaction.create({ data: { organizationId: orgId, accountId: (await check(m.toAccountId)).id, date, type: "entrada", description: m.description, category: m.category, amount: m.amount, saleId: m.saleId } });
   }
 
   async recordMovement(db: Db, orgId: string, m: { type: "entrada" | "saida"; description: string; category: string; amount: number; date?: Date; pixChargeId?: string }) {
@@ -76,9 +154,15 @@ export class FinanceService {
   }
 
   async reverseSale(db: Db, orgId: string, saleId: string, number: number) {
-    const original = await db.transaction.findFirst({ where: { organizationId: orgId, saleId, type: "entrada" }, orderBy: { createdAt: "asc" } });
-    if (!original) return;
-    await db.transaction.create({ data: { organizationId: orgId, accountId: original.accountId, date: todayDate(), type: "saida", description: `Estorno da venda #${String(number).padStart(6, "0")}`, category: "Vendas", amount: original.amount, saleId } });
+    const label = `Estorno da venda #${String(number).padStart(6, "0")}`;
+    await db.financeEntry.updateMany({ where: { organizationId: orgId, saleId, status: "pendente" }, data: { status: "cancelado" } });
+    const rows = await db.transaction.findMany({ where: { organizationId: orgId, OR: [{ saleId }, { entry: { saleId } }] }, select: { accountId: true, type: true, amount: true } });
+    const byAccount = new Map<string, number>();
+    for (const r of rows) byAccount.set(r.accountId, (byAccount.get(r.accountId) ?? 0) + (r.type === "entrada" ? 1 : -1) * cents(num(r.amount)));
+    for (const [accountId, net] of byAccount) {
+      if (net === 0) continue;
+      await db.transaction.create({ data: { organizationId: orgId, accountId, date: todayDate(), type: net > 0 ? "saida" : "entrada", description: label, category: "Vendas", amount: fromCents(Math.abs(net)), saleId } });
+    }
   }
 
   private async balances(orgId: string) {

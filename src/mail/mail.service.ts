@@ -24,6 +24,12 @@ export class MailService {
   invite(to: string, company: string, inviter: string, token: string) {
     return this.send(to, `Gestor Br — convite para ${company}`, `${inviter} convidou você para acessar ${company} no Gestor Br.\n\nDefina sua senha para entrar (válido por 7 dias):\n${this.env.webUrl}/reset-password?token=${token}`);
   }
+
+  saleReceipt(to: string, name: string, sale: { number: string; date: Date; total: number; items: string[] }) {
+    const when = sale.date.toLocaleString("pt-BR");
+    const total = sale.total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    return this.send(to, `Comprovante da venda #${sale.number}`, `Olá, ${name}.\n\nSegue o comprovante da venda #${sale.number} em ${when}.\n\n${sale.items.join("\n")}\n\nTotal: ${total}\n\nEste comprovante não tem valor fiscal.`);
+  }
 }
 
 @Global()

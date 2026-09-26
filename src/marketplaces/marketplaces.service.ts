@@ -125,7 +125,7 @@ export class MarketplacesService {
       const counter = await tx.counter.upsert({ where: { organizationId_key: { organizationId: orgId, key: "sale" } }, create: { organizationId: orgId, key: "sale", value: 1 }, update: { value: { increment: 1 } } });
       const total = fromCents(cents(num(o.total)));
       const sale = await tx.sale.create({ data: { organizationId: orgId, number: counter.value, userId: ctx.user.id, origin: "manual", status: "concluida", payment: "outros", subtotal: total, total, register: `${NAMES[o.marketplace]} ${o.number}` } });
-      await this.finance.recordSale(tx, orgId, { id: sale.id, number: sale.number, total, methods: ["outros"] });
+      await this.finance.recordSale(tx, orgId, { id: sale.id, number: sale.number, payments: [{ method: "outros", amount: total }] });
       return tx.marketplaceOrder.update({ where: { id }, data: { saleId: sale.id, ...(o.status === "novo" ? { status: "faturado" } : {}) } });
     });
     await this.audit.log({ organizationId: orgId, userId: ctx.user.id, action: "marketplace.invoice", entity: "marketplace_order", entityId: id, text: `${ctx.user.name} importou o pedido ${order.number} como venda`, ip });
@@ -136,14 +136,14 @@ export class MarketplacesService {
     const p = await this.prisma.product.findFirst({ where: { id: productId, organizationId: orgId, deletedAt: null }, include: { listings: true } });
     if (!p) throw new NotFoundException("Produto não encontrado.");
     const published = Object.fromEntries(IDS.map((m) => [m, p.listings.some((l) => l.marketplace === m && l.published)])) as Record<Marketplace, boolean>;
-    return { id: p.id, name: p.name, sku: p.sku, price: num(p.price), stock: p.stock, published };
+    return { id: p.id, name: p.name, sku: p.sku, price: num(p.price), stock: num(p.stock), published };
   }
 
   async listings(ctx: AuthContext, q: ListQuery) {
     const orgId = orgOf(ctx);
     const where: Prisma.ProductWhereInput = { organizationId: orgId, deletedAt: null, ...(q.search ? { OR: [{ name: { contains: q.search, mode: "insensitive" } }, { sku: { contains: q.search, mode: "insensitive" } }] } : {}) };
     const [rows, total] = await Promise.all([this.prisma.product.findMany({ where, include: { listings: true }, orderBy: { name: "asc" }, ...skipTake(q) }), this.prisma.product.count({ where })]);
-    return page(rows.map((p) => ({ id: p.id, name: p.name, sku: p.sku, price: num(p.price), stock: p.stock, published: Object.fromEntries(IDS.map((m) => [m, p.listings.some((l) => l.marketplace === m && l.published)])) })), total, q);
+    return page(rows.map((p) => ({ id: p.id, name: p.name, sku: p.sku, price: num(p.price), stock: num(p.stock), published: Object.fromEntries(IDS.map((m) => [m, p.listings.some((l) => l.marketplace === m && l.published)])) })), total, q);
   }
 
   async togglePublish(ctx: AuthContext, productId: string, marketplace: Marketplace, ip: string) {

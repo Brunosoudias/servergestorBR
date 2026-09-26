@@ -6,7 +6,7 @@ import { ENV, type Env } from "../../config/env";
 import { PrismaService } from "../../prisma/prisma.service";
 import type { AuthedRequest } from "../auth-context";
 import { IS_PUBLIC, NO_ORG } from "../decorators";
-import { ROLE_PERMISSIONS, type RoleName } from "../permissions";
+import { permissionsOf } from "../permissions";
 
 export const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
 
@@ -55,7 +55,7 @@ export class SessionGuard implements CanActivate {
       sessionId: session.id,
       organizationId: membership?.organizationId ?? null,
       role: membership?.role ?? null,
-      permissions: membership ? ROLE_PERMISSIONS[membership.role as RoleName] : [],
+      permissions: membership ? permissionsOf(membership.role, membership.extraPermissions) : [],
     };
     return true;
   }
