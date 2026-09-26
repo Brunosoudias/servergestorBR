@@ -6,9 +6,9 @@ const view = (...m: string[]) => m.map((x) => `${x}:view`);
 
 export const POS_PERMISSIONS = [
   "pos:view", "pos:sell", "pos:discount", "pos:cancel", "pos:open_register", "pos:close_register", "pos:withdrawal", "pos:deposit", "pos:history",
-  "pos:manage", "pos:cancel_closed", "pos:return", "pos:price", "pos:settings",
+  "pos:manage", "pos:cancel_closed", "pos:return", "pos:price", "pos:settings", "customers:credit",
 ];
-const POS_SUPERVISOR = ["pos:discount", "pos:manage", "pos:cancel_closed", "pos:return", "pos:price", "pos:settings"];
+const POS_SUPERVISOR = ["pos:discount", "pos:manage", "pos:cancel_closed", "pos:return", "pos:price", "pos:settings", "customers:credit"];
 
 const EVERYTHING = [
   ...["dashboard", "finance", "sales", "customers", "products", "inventory", "wallet", "automations", "reports", "settings", "fiscal", "marketplaces"].flatMap((m) => all(m)),
@@ -28,7 +28,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, string[]> = {
   supervisor: [
     ...view("dashboard", "products", "sales", "customers"),
     "pos:view", "pos:sell", "pos:history", "pos:open_register", "pos:close_register", "pos:withdrawal", "pos:deposit",
-    "pos:discount", "pos:cancel", "pos:cancel_closed", "pos:price", "pos:manage", "pos:return",
+    "pos:discount", "pos:cancel", "pos:cancel_closed", "pos:price", "pos:manage", "pos:return", "customers:credit",
   ],
   estoque: [...view("dashboard"), ...all("products"), ...all("inventory")],
   visualizador: view("dashboard", "finance", "sales", "customers", "products", "inventory", "wallet", "reports", "automations", "fiscal", "marketplaces"),

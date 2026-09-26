@@ -168,7 +168,7 @@ export class SalesService {
     const storeCredit = payments.filter((x) => x.method === "credito_cliente").reduce((a, x) => a + x.amount, 0);
     if (storeCredit > 0 && !p.customerId) throw new BadRequestException("Selecione o cliente para usar o crédito dele.");
     const onCredit = payments.filter((x) => x.method === "fiado").reduce((a, x) => a + x.amount, 0);
-    if (onCredit > 0 && !p.customerId) throw new BadRequestException("Selecione o cliente para vender no fiado.");
+    if (onCredit > 0 && !p.customerId) throw new BadRequestException("Selecione o cliente para vender na carteira.");
     const document = (p.document ?? customer?.document ?? "").replace(/\D/g, "");
 
     const run = () => this.prisma.$transaction(async (tx) => {
@@ -182,11 +182,12 @@ export class SalesService {
       }
       if (onCredit > 0) {
         const overdue = await tx.financeEntry.findFirst({ where: { organizationId: orgId, kind: "receber", status: "pendente", method: "fiado", dueDate: { lt: todayDate() }, sale: { customerId: p.customerId! } }, select: { id: true } });
-        if (overdue) throw new ConflictException("Este cliente tem fiado em atraso. Regularize antes de uma nova venda a prazo.");
+        if (overdue) throw new ConflictException("Este cliente tem carteira em atraso. Regularize antes de uma nova venda a prazo.");
         const open = await tx.financeEntry.aggregate({ where: { organizationId: orgId, kind: "receber", status: "pendente", method: "fiado", sale: { customerId: p.customerId! } }, _sum: { amount: true } });
         const limit = cents(num(customer!.creditLimit));
-        if (limit <= 0) throw new BadRequestException("Este cliente não tem limite de fiado cadastrado.");
-        if (cents(num(open._sum.amount)) + onCredit > limit) throw new ConflictException(`A venda ultrapassa o limite de fiado do cliente (R$ ${fromCents(limit).toFixed(2).replace(".", ",")}).`);
+        const available = Math.max(0, limit - cents(num(open._sum.amount)));
+        if (limit <= 0) throw new BadRequestException("Este cliente não tem limite de carteira cadastrado.");
+        if (onCredit > available) throw new ConflictException(`Disponível na carteira: R$ ${fromCents(available).toFixed(2).replace(".", ",")}. Esta venda passa desse valor.`);
       }
       const counter = await tx.counter.upsert({ where: { organizationId_key: { organizationId: orgId, key: "sale" } }, create: { organizationId: orgId, key: "sale", value: 1 }, update: { value: { increment: 1 } } });
       const created = await tx.sale.create({

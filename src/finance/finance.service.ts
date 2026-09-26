@@ -42,7 +42,7 @@ export interface PaymentConfig {
   method: PaymentMethod; accountId: string | null; feePercent: number; installmentFeePercent: number; feeFixed: number; settlementDays: number; enabledInPos: boolean;
 }
 export const PAYMENT_LABEL: Record<PaymentMethod, string> = {
-  dinheiro: "Dinheiro", pix: "PIX", debito: "Cartão de débito", credito: "Cartão de crédito", boleto: "Boleto", outros: "Outros", credito_cliente: "Crédito do cliente", fiado: "Fiado",
+  dinheiro: "Dinheiro", pix: "PIX", debito: "Cartão de débito", credito: "Cartão de crédito", boleto: "Boleto", outros: "Outros", credito_cliente: "Crédito do cliente", fiado: "Carteira",
 };
 export const DEFAULT_PAYMENT_CONFIG: Record<PaymentMethod, { settlementDays: number; enabledInPos: boolean }> = {
   dinheiro: { settlementDays: 0, enabledInPos: true }, pix: { settlementDays: 0, enabledInPos: true }, debito: { settlementDays: 1, enabledInPos: true },
