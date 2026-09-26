@@ -82,26 +82,43 @@ export class FiscalService {
     return c.value;
   }
 
-  async emit(ctx: AuthContext, dto: EmitDto, ip: string) {
-    this.integrations.requireSandbox("O emissor de notas fiscais");
-    const orgId = orgOf(ctx);
-    const num6 = Number(dto.saleNumber.replace(/\D/g, ""));
-    const sale = await this.prisma.sale.findFirst({ where: { organizationId: orgId, number: Number.isInteger(num6) ? num6 : -1 }, include: { customer: { select: { name: true } } } });
-    if (!sale) throw new NotFoundException("Venda não encontrada.");
-    if (sale.status !== "concluida") throw new ConflictException("Só é possível emitir nota de vendas concluídas.");
-    if (await this.prisma.fiscalNote.findFirst({ where: { saleId: sale.id, status: { in: ["autorizada", "pendente"] } } })) throw new ConflictException("Esta venda já possui uma nota fiscal.");
+  async emitForSale(orgId: string, saleId: string, type: "nfe" | "nfce" = "nfce") {
+    const sale = await this.prisma.sale.findFirst({ where: { id: saleId, organizationId: orgId }, include: { customer: { select: { name: true } } } });
+    if (!sale || sale.status !== "concluida") return null;
+    if (await this.prisma.fiscalNote.findFirst({ where: { saleId: sale.id, status: { in: ["autorizada", "pendente"] } } })) return null;
     const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: orgId } });
     const settings = await this.settingsRow(orgId);
-    const type = TYPE_KEY[dto.type];
     const series = type === "nfe" ? settings.nfeSeries : settings.nfceSeries;
     const number = await this.nextNumber(orgId, type);
     const note = await this.prisma.fiscalNote.create({
       data: { organizationId: orgId, saleId: sale.id, type, number, series, total: sale.total, customerName: sale.customer?.name ?? "", key: buildAccessKey({ cnpj: org.cnpj, model: type === "nfe" ? 55 : 65, series, number, date: new Date(), code: Math.floor(Math.random() * 1e8) }) },
       include: { sale: { select: { number: true } } },
     });
-    await this.audit.log({ organizationId: orgId, userId: ctx.user.id, action: "fiscal.emit", entity: "fiscal_note", entityId: note.id, text: `${ctx.user.name} emitiu ${dto.type} ${number} da venda #${padNumber(sale.number)}`, ip });
     await this.scheduleAuthorization(note.id);
     return this.dto(note);
+  }
+
+  async cancelForSale(orgId: string, saleId: string, reason: string) {
+    const notes = await this.prisma.fiscalNote.findMany({ where: { organizationId: orgId, saleId, status: { in: ["autorizada", "pendente"] } } });
+    for (const n of notes) {
+      await this.prisma.fiscalNote.update({ where: { id: n.id }, data: { status: "cancelada", rejectReason: reason } });
+    }
+    return notes.length;
+  }
+
+  async emit(ctx: AuthContext, dto: EmitDto, ip: string) {
+    this.integrations.requireSandbox("O emissor de notas fiscais");
+    const orgId = orgOf(ctx);
+    const num6 = Number(dto.saleNumber.replace(/\D/g, ""));
+    const sale = await this.prisma.sale.findFirst({ where: { organizationId: orgId, number: Number.isInteger(num6) ? num6 : -1 }, include: { customer: { select: { name: true } } } });
+    if (!sale) throw new NotFoundException("Venda não encontrada.");
+    const note = await this.emitForSale(orgId, sale.id, TYPE_KEY[dto.type]);
+    if (!note) {
+      if (sale.status !== "concluida") throw new ConflictException("Só é possível emitir nota de vendas concluídas.");
+      throw new ConflictException("Esta venda já possui uma nota fiscal.");
+    }
+    await this.audit.log({ organizationId: orgId, userId: ctx.user.id, action: "fiscal.emit", entity: "fiscal_note", entityId: note.id, text: `${ctx.user.name} emitiu ${dto.type} ${note.number} da venda #${padNumber(sale.number)}`, ip });
+    return note;
   }
 
   private async scheduleAuthorization(id: string) {

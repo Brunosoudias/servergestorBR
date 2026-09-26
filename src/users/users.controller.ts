@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post, Query } from "@nestjs/common
 import type { AuthContext } from "../common/auth-context";
 import { Auth, ClientIp, RequirePermission } from "../common/decorators";
 import { ListQuery } from "../common/pagination";
-import { InviteDto, UpdateMemberDto, UsersService } from "./users.service";
+import { CreateUserDto, InviteDto, UpdateMemberDto, UsersService } from "./users.service";
 
 @Controller("users")
 export class UsersController {
@@ -10,6 +10,9 @@ export class UsersController {
 
   @RequirePermission("settings:view") @Get()
   list(@Auth() ctx: AuthContext, @Query() q: ListQuery) { return this.users.list(ctx, q); }
+
+  @RequirePermission("settings:create") @Post()
+  create(@Auth() ctx: AuthContext, @Body() dto: CreateUserDto, @ClientIp() ip: string) { return this.users.create(ctx, dto, ip); }
 
   @RequirePermission("settings:create") @Post("invite")
   invite(@Auth() ctx: AuthContext, @Body() dto: InviteDto, @ClientIp() ip: string) { return this.users.invite(ctx, dto, ip); }

@@ -3,7 +3,7 @@ import * as bcrypt from "bcryptjs";
 import { randomBytes } from "crypto";
 import type { Membership, Organization, User } from "@prisma/client";
 import { AuditService } from "../audit/audit.service";
-import { ROLE_PERMISSIONS, type RoleName } from "../common/permissions";
+import { permissionsOf } from "../common/permissions";
 import { hashToken } from "../common/guards/session.guard";
 import { ENV, type Env } from "../config/env";
 import { MailService } from "../mail/mail.service";
@@ -43,7 +43,7 @@ export class AuthService {
       user: { id: user.id, name: user.name, email: user.email, role: active.role, status: active.status, lastAccess: (user.lastAccessAt ?? user.createdAt).toISOString() },
       organization: orgDto(active.organization),
       organizations: memberships.map((m) => orgDto(m.organization)),
-      permissions: ROLE_PERMISSIONS[active.role as RoleName],
+      permissions: permissionsOf(active.role, active.extraPermissions),
     };
   }
 

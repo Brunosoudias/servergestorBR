@@ -150,7 +150,7 @@ export class InsightsService {
         return { title: "Vendas", columns: ["Produto", "Unidades", "Receita"],
           metrics: [{ label: "Total vendido", value: r2(total), kind: "money" }, { label: "Pedidos", value: n, kind: "number" }, { label: "Ticket médio", value: n ? r2(total / n) : 0, kind: "money" }],
           chart: months.map((m) => ({ label: m.label, valor: r2(series.filter((s) => s.createdAt >= m.from && s.createdAt <= m.to).reduce((a, s) => a + num(s.total), 0)) })),
-          rows: items.map((i) => ({ name: i.name, a: i._sum.qty ?? 0, b: r2(num(i._sum.total)) })) };
+          rows: items.map((i) => ({ name: i.name, a: num(i._sum.qty), b: r2(num(i._sum.total)) })) };
       }
       case "estoque": {
         const [stockSum, outAgg, moved, prods, series] = await Promise.all([
@@ -161,11 +161,11 @@ export class InsightsService {
           this.prisma.stockMovement.findMany({ where: { organizationId: orgId, type: "saida", createdAt: { gte: months[0].from, lte: months[5].to } }, select: { createdAt: true, quantity: true } }),
         ]);
         const [low] = await this.prisma.$queryRaw<{ n: bigint }[]>(Prisma.sql`SELECT COUNT(*) AS n FROM "Product" WHERE "organizationId" = ${orgId} AND "deletedAt" IS NULL AND "stock" < "minStock"`);
-        const units = stockSum._sum.stock ?? 0;
+        const units = num(stockSum._sum.stock);
         return { title: "Estoque", columns: ["Produto", "Estoque", "Mínimo"],
-          metrics: [{ label: "Giro médio", value: units ? Math.round(((outAgg._sum.quantity ?? 0) / units) * 10) / 10 : 0, kind: "number" }, { label: "Produtos parados", value: Math.max(0, stockSum._count._all - moved.length), kind: "number" }, { label: "Estoque baixo", value: Number(low.n), kind: "number" }],
-          chart: months.map((m) => ({ label: m.label, valor: series.filter((s) => s.createdAt >= m.from && s.createdAt <= m.to).reduce((a, s) => a + s.quantity, 0) })),
-          rows: prods.map((x) => ({ name: x.name, a: x.stock, b: x.minStock })) };
+          metrics: [{ label: "Giro médio", value: units ? Math.round((num(outAgg._sum.quantity) / units) * 10) / 10 : 0, kind: "number" }, { label: "Produtos parados", value: Math.max(0, stockSum._count._all - moved.length), kind: "number" }, { label: "Estoque baixo", value: Number(low.n), kind: "number" }],
+          chart: months.map((m) => ({ label: m.label, valor: series.filter((s) => s.createdAt >= m.from && s.createdAt <= m.to).reduce((a, s) => a + num(s.quantity), 0) })),
+          rows: prods.map((x) => ({ name: x.name, a: num(x.stock), b: num(x.minStock) })) };
       }
       case "pdv": {
         const where: Prisma.SaleWhereInput = { organizationId: orgId, origin: "pdv", createdAt: { gte: p.from, lte: p.to } };

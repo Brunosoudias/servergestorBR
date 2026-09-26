@@ -113,7 +113,7 @@ describe("Integrações frontend ↔ backend (e2e)", () => {
       const sale = (await c.post("/pos/sales").send({ items: [{ productId: p.id, qty: 2, discount: 0 }], discount: 0, total: 200, payments: [{ method: "dinheiro", amount: 200 }] }).expect(201)).body;
       let accs = (await c.get("/finance/accounts").expect(200)).body;
       expect(accs.find((a: { name: string }) => a.name === "Caixa da Loja").balance).toBe(200);
-      await c.post(`/sales/${sale.id}/cancel`).expect(201);
+      await c.post(`/pos/sales/${sale.id}/cancel`).send({ reason: "Cliente desistiu" }).expect(200);
       accs = (await c.get("/finance/accounts").expect(200)).body;
       expect(accs.find((a: { name: string }) => a.name === "Caixa da Loja").balance).toBe(0);
       const stmt = (await c.get("/wallet/statement").expect(200)).body;

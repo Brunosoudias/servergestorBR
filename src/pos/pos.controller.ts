@@ -1,12 +1,14 @@
-import { Body, Controller, Get, HttpCode, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Post, Put, Query } from "@nestjs/common";
 import type { AuthContext } from "../common/auth-context";
 import { Auth, ClientIp, RequirePermission } from "../common/decorators";
 import { ListQuery } from "../common/pagination";
-import { CashMoveDto, CloseRegisterDto, OpenRegisterDto, PosSaleDto, PosService } from "./pos.service";
+import { AuthorizeDto, PaymentConfigDto, PosConfigService, PosSettingsDto, TerminalDto, UpdateTerminalDto } from "./pos-config.service";
+import { CancelPosSaleDto, CashMoveDto, CloseRegisterDto, ForceCloseDto, OpenRegisterDto, PosEventDto, PosSaleDto, PosService, ReceiptEmailDto, SessionsQuery } from "./pos.service";
+import { ReturnsService, SaleReturnDto } from "./returns.service";
 
 @Controller("pos")
 export class PosController {
-  constructor(private readonly pos: PosService) {}
+  constructor(private readonly pos: PosService, private readonly config: PosConfigService, private readonly returns: ReturnsService) {}
 
   @RequirePermission("pos:view") @Get("register")
   state(@Auth() ctx: AuthContext) { return this.pos.state(ctx); }
@@ -28,4 +30,58 @@ export class PosController {
 
   @RequirePermission("pos:history") @Get("sales")
   history(@Auth() ctx: AuthContext, @Query() q: ListQuery) { return this.pos.history(ctx, q); }
+
+  @RequirePermission("pos:cancel") @HttpCode(200) @Post("sales/:id/cancel")
+  cancelSale(@Auth() ctx: AuthContext, @Param("id") id: string, @Body() dto: CancelPosSaleDto, @ClientIp() ip: string) { return this.pos.cancelSale(ctx, id, dto, ip); }
+
+  @RequirePermission("pos:history") @Get("sales/:id/returns")
+  listReturns(@Auth() ctx: AuthContext, @Param("id") id: string) { return this.returns.list(ctx, id); }
+
+  @RequirePermission("pos:return") @HttpCode(201) @Post("sales/:id/returns")
+  createReturn(@Auth() ctx: AuthContext, @Param("id") id: string, @Body() dto: SaleReturnDto, @ClientIp() ip: string) { return this.returns.create(ctx, id, dto, ip); }
+
+  @RequirePermission("pos:view") @Get("customers/:id/credit")
+  customerCredit(@Auth() ctx: AuthContext, @Param("id") id: string) { return this.returns.customerCredit(ctx, id); }
+
+  @RequirePermission("pos:history") @HttpCode(200) @Post("sales/:id/receipt")
+  sendReceipt(@Auth() ctx: AuthContext, @Param("id") id: string, @Body() dto: ReceiptEmailDto) { return this.pos.sendReceipt(ctx, id, dto); }
+
+  @RequirePermission("pos:history") @Get("reports/period")
+  period(@Auth() ctx: AuthContext, @Query() q: SessionsQuery) { return this.pos.period(ctx, q); }
+
+  @RequirePermission("pos:history") @Get("sessions")
+  sessions(@Auth() ctx: AuthContext, @Query() q: SessionsQuery) { return this.pos.sessions(ctx, q); }
+
+  @RequirePermission("pos:history") @Get("sessions/:id")
+  report(@Auth() ctx: AuthContext, @Param("id") id: string) { return this.pos.report(ctx, id); }
+
+  @RequirePermission("pos:manage") @HttpCode(200) @Post("sessions/:id/close")
+  forceClose(@Auth() ctx: AuthContext, @Param("id") id: string, @Body() dto: ForceCloseDto, @ClientIp() ip: string) { return this.pos.forceClose(ctx, id, dto, ip); }
+
+  @RequirePermission("pos:view") @HttpCode(201) @Post("authorize")
+  authorize(@Auth() ctx: AuthContext, @Body() dto: AuthorizeDto, @ClientIp() ip: string) { return this.config.authorize(ctx, dto, ip); }
+
+  @RequirePermission("pos:view") @HttpCode(201) @Post("events")
+  event(@Auth() ctx: AuthContext, @Body() dto: PosEventDto, @ClientIp() ip: string) { return this.pos.event(ctx, dto, ip); }
+
+  @RequirePermission("pos:view") @Get("settings")
+  settings(@Auth() ctx: AuthContext) { return this.config.publicSettings(ctx); }
+
+  @RequirePermission("pos:settings") @Put("settings")
+  updateSettings(@Auth() ctx: AuthContext, @Body() dto: PosSettingsDto, @ClientIp() ip: string) { return this.config.updateSettings(ctx, dto, ip); }
+
+  @RequirePermission("pos:view") @Get("terminals")
+  terminals(@Auth() ctx: AuthContext) { return this.config.terminals(ctx); }
+
+  @RequirePermission("pos:settings") @HttpCode(201) @Post("terminals")
+  createTerminal(@Auth() ctx: AuthContext, @Body() dto: TerminalDto, @ClientIp() ip: string) { return this.config.createTerminal(ctx, dto, ip); }
+
+  @RequirePermission("pos:settings") @Put("terminals/:id")
+  updateTerminal(@Auth() ctx: AuthContext, @Param("id") id: string, @Body() dto: UpdateTerminalDto, @ClientIp() ip: string) { return this.config.updateTerminal(ctx, id, dto, ip); }
+
+  @RequirePermission("pos:view") @Get("payment-methods")
+  paymentMethods(@Auth() ctx: AuthContext) { return this.config.paymentMethods(ctx); }
+
+  @RequirePermission("pos:settings") @Put("payment-methods/:method")
+  updatePaymentMethod(@Auth() ctx: AuthContext, @Param("method") method: string, @Body() dto: PaymentConfigDto, @ClientIp() ip: string) { return this.config.updatePaymentMethod(ctx, method, dto, ip); }
 }

@@ -1,7 +1,8 @@
 /**
  * Dados de demonstração para DESENVOLVIMENTO. Recusa rodar em produção. Pode ser executado várias vezes:
  * cada bloco só grava se a empresa ainda não tiver aquele tipo de dado.
- * Login: bruno@empresaabc.com.br / senha1234.
+ * Login (senha de todos: senha1234):
+ * bruno@empresaabc.com.br superadmin, admin@, maria@ financeiro, fiscal@, joao@ PDV, supervisor@, ana@ estoque, carlos@ vendedor, lia@ consulta.
  *
  * É aqui que vivem os dados que antes eram "mock" no frontend (tudo agora está no banco).
  */
@@ -53,14 +54,21 @@ async function main() {
   await prisma.organization.update({ where: { id: orgId }, data: { plan: "professional", subscriptionStatus: "active", renewsAt: new Date(Date.now() + 5 * 86_400_000), onboarded: true } });
 
   const users: Record<string, string> = { Bruno: ownerId };
-  for (const [name, mail, role, status, last] of [
-    ["Maria Oliveira", "maria@empresaabc.com.br", "financeiro", "ativo", "2026-09-18T09:40:00Z"],
-    ["João Silva", "joao@empresaabc.com.br", "caixa", "ativo", "2026-09-17T18:02:00Z"],
-    ["Ana Costa", "ana@empresaabc.com.br", "estoque", "convidado", "2026-09-10T10:00:00Z"],
-    ["Carlos Souza", "carlos@empresaabc.com.br", "vendedor", "inativo", "2026-08-01T10:00:00Z"],
+  for (const [name, mail, role, last] of [
+    ["Admin Silva", "admin@empresaabc.com.br", "admin", "2026-09-18T09:00:00Z"],
+    ["Maria Oliveira", "maria@empresaabc.com.br", "financeiro", "2026-09-18T09:40:00Z"],
+    ["Paula Nunes", "fiscal@empresaabc.com.br", "fiscal", "2026-09-18T09:20:00Z"],
+    ["João Silva", "joao@empresaabc.com.br", "caixa", "2026-09-17T18:02:00Z"],
+    ["Paulo Mendes", "supervisor@empresaabc.com.br", "supervisor", "2026-09-18T11:00:00Z"],
+    ["Ana Costa", "ana@empresaabc.com.br", "estoque", "2026-09-10T10:00:00Z"],
+    ["Carlos Souza", "carlos@empresaabc.com.br", "vendedor", "2026-08-01T10:00:00Z"],
+    ["Lia Consulta", "lia@empresaabc.com.br", "visualizador", "2026-09-15T10:00:00Z"],
   ] as const) {
-    const u = (await prisma.user.findUnique({ where: { email: mail } })) ?? (await prisma.user.create({ data: { name, email: mail, passwordHash: status === "convidado" ? null : passwordHash, lastAccessAt: d(last) } }));
-    await prisma.membership.upsert({ where: { userId_organizationId: { userId: u.id, organizationId: orgId } }, create: { userId: u.id, organizationId: orgId, role, status }, update: {} });
+    const existing = await prisma.user.findUnique({ where: { email: mail } });
+    const u = existing
+      ? await prisma.user.update({ where: { id: existing.id }, data: { name, passwordHash } })
+      : await prisma.user.create({ data: { name, email: mail, passwordHash, lastAccessAt: d(last) } });
+    await prisma.membership.upsert({ where: { userId_organizationId: { userId: u.id, organizationId: orgId } }, create: { userId: u.id, organizationId: orgId, role, status: "ativo" }, update: { role, status: "ativo" } });
     users[name.split(" ")[0]] = u.id;
   }
 
@@ -255,7 +263,15 @@ async function main() {
     await prisma.account.update({ where: { id: acc[name] }, data: { openingBalance: r2(target - net) } });
   }
 
-  console.log(`Seed aplicado. Login: ${email} / senha1234 (empresa: Empresa ABC LTDA)`);
+  console.log("Seed aplicado. Senha de todos: senha1234 (empresa: Empresa ABC LTDA)");
+  console.log("  bruno@empresaabc.com.br  superadmin");
+  console.log("  admin@empresaabc.com.br  admin");
+  console.log("  maria@empresaabc.com.br  financeiro");
+  console.log("  fiscal@empresaabc.com.br fiscal");
+  console.log("  joao@empresaabc.com.br   PDV");
+  console.log("  ana@empresaabc.com.br    estoque");
+  console.log("  carlos@empresaabc.com.br vendedor");
+  console.log("  lia@empresaabc.com.br    consulta");
 }
 
 main().catch((e) => { console.error(e); process.exit(1); }).finally(() => prisma.$disconnect());
