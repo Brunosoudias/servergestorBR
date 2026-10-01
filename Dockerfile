@@ -1,7 +1,7 @@
 # API do Gestor Br.
 #   docker build -t gestor-api .                    -> imagem da API
 #   docker build --target migrate -t gestor-migrate . -> roda "prisma migrate deploy" antes do deploy
-FROM node:22-bookworm-slim AS base
+FROM node:26-bookworm-slim AS base
 RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 
