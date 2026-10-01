@@ -10,8 +10,9 @@ import { PrismaClient, type Marketplace } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
 import { buildAccessKey } from "../src/common/fiscal-key";
 import { buildPixPayload } from "../src/common/pix";
+import { createPrismaAdapter } from "../src/prisma/prisma-adapter";
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ adapter: createPrismaAdapter() });
 
 const PRODUCTS: [string, string, string, number, number, number, number, string][] = [
   ["Notebook Dell Inspiron", "SKU-1001", "Informática", 4500, 3400, 14, 5, "Dell Brasil"],

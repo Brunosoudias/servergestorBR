@@ -24,11 +24,13 @@
     "@nestjs/core": "^12.1.0",
     "@nestjs/platform-express": "^12.1.0",
     "@nestjs/throttler": "^6.7.1",
+    "@prisma/adapter-pg": "^7.10.0",
     "@prisma/client": "^7.10.0",
     "bcryptjs": "^3.0.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.15.1",
     "cookie-parser": "^1.4.7",
+    "dotenv": "^18.0.5",
     "helmet": "^8.3.0",
     "ioredis": "^6.0.0",
     "nodemailer": "^10.0.12",
@@ -51,7 +53,7 @@
     "supertest": "^7.3.0",
     "ts-jest": "^29.4.14",
     "ts-node": "^10.9.2",
-    "typescript": "^7.0.2"
+    "typescript": "^5.9.3"
   },
   "overrides": {
     "deepmerge-ts": "^8.0.2"

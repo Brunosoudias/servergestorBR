@@ -9,6 +9,7 @@ FROM base AS build
 COPY package.json package-lock.json ./
 RUN npm ci
 COPY prisma ./prisma
+COPY prisma.config.ts ./
 RUN npx prisma generate
 COPY tsconfig.json tsconfig.build.json nest-cli.json ./
 COPY src ./src
