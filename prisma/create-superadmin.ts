@@ -10,8 +10,9 @@ import * as bcrypt from "bcryptjs";
 import { loadEnv } from "../src/config/env";
 import { encryptSecret } from "../src/common/secret";
 import { generateTotpSecret, otpauthUrl } from "../src/common/totp";
+import { createPrismaAdapter } from "../src/prisma/prisma-adapter";
 
-const prisma = new PrismaClient();
+const prisma = new PrismaClient({ adapter: createPrismaAdapter() });
 const PASSWORD_RULE = /^(?=.*[A-Za-z])(?=.*\d).{14,72}$/;
 
 async function main() {
