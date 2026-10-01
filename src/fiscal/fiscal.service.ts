@@ -49,7 +49,11 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
   constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly integrations: IntegrationsService, private readonly notifications: NotificationsService, @Inject(ENV) private readonly env: Env) {}
 
   /** As notas pendentes ficam no banco: qualquer instância as autoriza, inclusive depois de um restart. */
-  onModuleInit() { this.stop = scheduleJob(this.prisma, this.log, "fiscal.authorize-pending", AUTHORIZE_POLL_MS, () => this.authorizePending()); }
+  onModuleInit() {
+    // O "autorizador" é simulado: em modo live nenhuma nota pode virar autorizada sem passar pela SEFAZ.
+    if (!this.integrations.sandbox) return;
+    this.stop = scheduleJob(this.prisma, this.log, "fiscal.authorize-pending", AUTHORIZE_POLL_MS, () => this.authorizePending());
+  }
   onModuleDestroy() { this.stop?.(); }
 
   private get authorizeDelayMs() { return Number(process.env.FISCAL_SANDBOX_DELAY_MS ?? 4000); }
@@ -97,6 +101,7 @@ export class FiscalService implements OnModuleInit, OnModuleDestroy {
   }
 
   async emitForSale(orgId: string, saleId: string, type: "nfe" | "nfce" = "nfce") {
+    if (!this.integrations.sandbox) return null;
     const sale = await this.prisma.sale.findFirst({ where: { id: saleId, organizationId: orgId }, include: { customer: { select: { name: true } } } });
     if (!sale || sale.status !== "concluida") return null;
     if (await this.prisma.fiscalNote.findFirst({ where: { saleId: sale.id, status: { in: ["autorizada", "pendente"] } } })) return null;

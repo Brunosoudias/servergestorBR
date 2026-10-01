@@ -8,6 +8,10 @@ updates:
       nestjs: { patterns: ["@nestjs/*"] }
       prisma: { patterns: ["prisma", "@prisma/*"] }
       aws: { patterns: ["@aws-sdk/*"] }
+    ignore:
+      # ts-jest 29 exige typescript <7
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: docker
     directory: /
     schedule: { interval: weekly }

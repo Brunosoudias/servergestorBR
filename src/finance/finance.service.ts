@@ -264,7 +264,7 @@ export class FinanceService {
   }
 
   async monthlyFlow(orgId: string, months = 6) {
-    const span = lastMonths(months);
+    const span = lastMonths(months).map((m) => ({ ...m, from: todayDate(m.from), to: todayDate(m.to) }));
     const rows = await this.prisma.transaction.findMany({ where: { organizationId: orgId, status: "confirmada", date: { gte: span[0].from, lte: span[span.length - 1].to } }, select: { date: true, type: true, amount: true } });
     return span.map((m) => {
       const inRange = rows.filter((r) => r.date >= m.from && r.date <= m.to);

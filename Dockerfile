@@ -22,7 +22,7 @@ FROM build AS prod-deps
 RUN npm prune --omit=dev
 
 FROM base AS runtime
-ENV NODE_ENV=production PORT=4000 UPLOAD_DIR=/app/uploads
+ENV NODE_ENV=production PORT=4000 UPLOAD_DIR=/app/uploads TZ=America/Sao_Paulo
 COPY --from=prod-deps --chown=node:node /app/node_modules ./node_modules
 COPY --from=build --chown=node:node /app/dist ./dist
 COPY --from=build --chown=node:node /app/package.json ./package.json

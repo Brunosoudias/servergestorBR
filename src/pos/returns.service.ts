@@ -63,6 +63,8 @@ export class ReturnsService {
     const total = lines.reduce((a, l) => a + l.amount, 0);
 
     const created = await this.prisma.$transaction(async (tx) => {
+      const [locked] = await tx.$queryRaw<{ status: string }[]>`SELECT status::text AS status FROM "Sale" WHERE id = ${sale.id} FOR UPDATE`;
+      if (locked?.status !== "concluida") throw new ConflictException("Só é possível devolver itens de vendas concluídas.");
       for (const l of lines) {
         const r = await tx.saleItem.updateMany({ where: { id: l.item.id, returnedQty: { lte: num(l.item.qty) - l.qty } }, data: { returnedQty: { increment: l.qty } } });
         if (r.count === 0) throw new ConflictException("Os itens já foram devolvidos em outra operação. Atualize a tela.");

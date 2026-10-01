@@ -329,6 +329,33 @@ describe("API (e2e)", () => {
       await owner.agent.patch(`/users/${created.body.id}`).set("X-Organization-Id", owner.orgId).send({ password: "Nova@Senha99" }).expect(200);
       await request(server()).post("/auth/login").send({ email, password: "Nova@Senha99" }).expect(200);
     });
+
+    it("quem não é superadmin só concede permissões extras que já tem, e nunca as de configurações", async () => {
+      const owner = await signup();
+      const mk = async (role: string, extraPermissions: string[] = []) => {
+        const email = `${role}${uniq()}@teste.com`;
+        const user = await prisma.user.create({ data: { name: role, email, passwordHash: await bcrypt.hash(PASSWORD, 4) } });
+        await prisma.membership.create({ data: { userId: user.id, organizationId: owner.orgId, role: role as never, status: "ativo", extraPermissions } });
+        return { id: user.id, email };
+      };
+      const manager = await mk("vendedor", ["settings:view", "settings:edit"]);
+      const target = await mk("caixa");
+      const agent = request.agent(server());
+      await agent.post("/auth/login").send({ email: manager.email, password: PASSWORD }).expect(200);
+      const patch = (body: object) => agent.patch(`/users/${target.id}`).set("X-Organization-Id", owner.orgId).send(body);
+      await patch({ extraPermissions: ["finance:view"] }).expect(403);
+      await patch({ extraPermissions: ["settings:edit"] }).expect(403);
+      await patch({ extraPermissions: ["sales:create"] }).expect(200);
+      await owner.agent.patch(`/users/${target.id}`).set("X-Organization-Id", owner.orgId).send({ extraPermissions: ["finance:view", "settings:view"] }).expect(200);
+    });
+
+    it("o link de redefinição de senha só vale uma vez, mesmo com envios simultâneos", async () => {
+      const { email } = await signup();
+      await request(server()).post("/auth/forgot-password").send({ email }).expect(200);
+      const token = mails.filter((m) => m.to === email).pop()!.token;
+      const results = await Promise.all([0, 1, 2].map((i) => request(server()).post("/auth/reset-password").send({ token, password: `Nova@Senha${i}0` })));
+      expect(results.filter((r) => r.status === 200)).toHaveLength(1);
+    });
   });
 
   describe("produtos", () => {
@@ -450,6 +477,9 @@ describe("API (e2e)", () => {
       await vo.post("/sales").send({ product: p.id, qty: 1, payment: "pix" }).expect(201);
       await vo.post(`/sales/${sale.id}/cancel`).expect(403);
       await vo.delete(`/products/${p.id}`).expect(403);
+      await vo.post("/sales").send({ product: p.id, qty: 1, price: 0.01, payment: "pix" }).expect(403);
+      await vo.post("/sales").send({ items: [{ productId: p.id, qty: 1, price: 100 }], payment: "pix" }).expect(201);
+      await o.post("/sales").send({ product: p.id, qty: 1, price: 80, payment: "pix" }).expect(201);
     });
   });
 

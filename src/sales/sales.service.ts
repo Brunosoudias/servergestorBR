@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { Transform, Type } from "class-transformer";
 import { ArrayMaxSize, IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Max, MaxLength, Min, ValidateIf, ValidateNested } from "class-validator";
 import { Prisma as PrismaNS, type Prisma } from "@prisma/client";
@@ -113,8 +113,15 @@ export class SalesService {
     return saleDto(s);
   }
 
-  create(ctx: AuthContext, input: CreateSaleDto, ip: string) {
+  async create(ctx: AuthContext, input: CreateSaleDto, ip: string) {
     const lines = input.items?.length ? input.items : [{ productId: input.product!, qty: input.qty!, price: input.price, discount: 0 }];
+    if (!ctx.permissions.includes("pos:price")) {
+      const ids = [...new Set(lines.filter((l) => l.price !== undefined).map((l) => l.productId))];
+      const catalog = new Map((await this.prisma.product.findMany({ where: { id: { in: ids }, organizationId: orgOf(ctx) }, select: { id: true, price: true } })).map((x) => [x.id, cents(num(x.price))]));
+      if (lines.some((l) => l.price !== undefined && catalog.has(l.productId) && Math.abs(cents(l.price) - catalog.get(l.productId)!) > 1)) {
+        throw new ForbiddenException("Você não tem permissão para alterar o preço do produto. Use o preço do cadastro.");
+      }
+    }
     return this.place(ctx, { customerId: input.customer, lines, globalDiscount: input.discount, shipping: input.shipping, origin: "manual", status: "pendente", method: input.payment, installments: input.installments }, ip);
   }
 
@@ -181,11 +188,13 @@ export class SalesService {
         if (r.count === 0) throw new ConflictException("O cliente não tem crédito suficiente.");
       }
       if (onCredit > 0) {
+        await tx.$queryRaw`SELECT id FROM "Customer" WHERE id = ${p.customerId!} FOR UPDATE`;
         const overdue = await tx.financeEntry.findFirst({ where: { organizationId: orgId, kind: "receber", status: "pendente", method: "fiado", dueDate: { lt: todayDate() }, sale: { customerId: p.customerId! } }, select: { id: true } });
         if (overdue) throw new ConflictException("Este cliente tem carteira em atraso. Regularize antes de uma nova venda a prazo.");
         const open = await tx.financeEntry.aggregate({ where: { organizationId: orgId, kind: "receber", status: "pendente", method: "fiado", sale: { customerId: p.customerId! } }, _sum: { amount: true } });
+        const notCompleted = await tx.salePayment.aggregate({ where: { method: "fiado", sale: { organizationId: orgId, customerId: p.customerId!, status: "pendente" } }, _sum: { amount: true } });
         const limit = cents(num(customer!.creditLimit));
-        const available = Math.max(0, limit - cents(num(open._sum.amount)));
+        const available = Math.max(0, limit - cents(num(open._sum.amount)) - cents(num(notCompleted._sum.amount)));
         if (limit <= 0) throw new BadRequestException("Este cliente não tem limite de carteira cadastrado.");
         if (onCredit > available) throw new ConflictException(`Disponível na carteira: R$ ${fromCents(available).toFixed(2).replace(".", ",")}. Esta venda passa desse valor.`);
       }
@@ -255,6 +264,8 @@ export class SalesService {
     if (existing.origin === "pdv" && !opts.onCancel) throw new ConflictException("Vendas do PDV são canceladas pelo Histórico do PDV, para registrar a devolução no caixa.");
     if (existing._count.returns > 0) throw new ConflictException("Esta venda já tem devolução registrada. Use a devolução para os itens restantes.");
     const sale = await this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT id FROM "Sale" WHERE id = ${id} FOR UPDATE`;
+      if (await tx.saleReturn.count({ where: { saleId: id } })) throw new ConflictException("Esta venda já tem devolução registrada. Use a devolução para os itens restantes.");
       const r = await tx.sale.updateMany({ where: { id, organizationId: orgId, status: { not: "cancelada" } }, data: { status: "cancelada", cancelledAt: new Date(), cancelReason: opts.reason ?? null, cancelledById: ctx.user.id } });
       if (r.count === 0) throw new ConflictException("Esta venda já foi cancelada.");
       const s = await tx.sale.findUniqueOrThrow({ where: { id }, include: SALE_INCLUDE });
