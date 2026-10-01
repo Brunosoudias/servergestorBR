@@ -36,6 +36,12 @@ model User {
   name           String
   email          String    @unique 
   passwordHash   String? 
+  mustChangePassword Boolean @default(false)
+  isSuperAdmin   Boolean   @default(false)
+  mfaSecretEnc   String?
+  mfaEnabledAt   DateTime?
+  mfaLastStep    Int       @default(0)
+  mfaRecoveryCodes String[] @default([])
   failedAttempts Int       @default(0)
   lockedUntil    DateTime?
   lastAccessAt   DateTime?
@@ -44,6 +50,7 @@ model User {
 
   memberships    Membership[]
   sessions       Session[]
+  devices        UserDevice[]
   tokens         AuthToken[]
   auditLogs      AuditLog[]
   stockMovements StockMovement[]
@@ -55,7 +62,7 @@ model User {
 model Organization {
   id        String   @id @default(cuid())
   name      String
-  cnpj      String   @default("")
+  cnpj      String?  @unique
   email     String   @default("")
   phone     String   @default("")
   address   String   @default("")
@@ -64,6 +71,8 @@ model Organization {
   segment   String   @default("")
   plan      Plan     @default(starter)
   onboarded Boolean  @default(false)
+  suspendedAt DateTime?
+  storageBytes BigInt  @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -120,6 +129,27 @@ model Membership {
   @@index([organizationId])
 }
 
+/// Garante que um job agendado rode em uma única instância da API por vez.
+model JobLease {
+  name        String   @id
+  owner       String
+  lockedUntil DateTime @db.Timestamptz(3)
+}
+
+model UserDevice {
+  id         String   @id @default(cuid())
+  userId     String
+  deviceHash String
+  userAgent  String   @default("")
+  lastIp     String   @default("")
+  createdAt  DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, deviceHash])
+}
+
 model Session {
   id         String   @id @default(cuid())
   userId     String
@@ -139,6 +169,7 @@ model Session {
 enum TokenType {
   password_reset
   invite
+  mfa_challenge
 }
 
 model AuthToken {

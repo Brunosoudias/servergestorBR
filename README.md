@@ -53,7 +53,8 @@ Toda rota autenticada usa o cookie de sessão e o header `X-Organization-Id` (em
 ## Decisões de segurança
 
 - **Sessão opaca no servidor**: cookie `httpOnly` + `SameSite=Lax` (`Secure` em produção); no banco fica só o hash SHA-256 do token. Revogável (logout, desativar usuário, redefinir senha derrubam as sessões). Expiração deslizante de 7 dias, teto de 30.
-- **Senhas**: bcrypt (custo 12). Login com resposta idêntica para e-mail inexistente e senha errada (e tempo equalizado); bloqueio de 15 min após 5 erros; rate limit por rota.
+- **Senhas**: bcrypt (custo 12). Login com resposta idêntica para e-mail inexistente e senha errada (e tempo equalizado); bloqueio de 15 min após 5 erros (vale também para a autorização de supervisor do PDV); rate limit por rota.
+- **Verificação em duas etapas (TOTP)**: opcional para todos e obrigatória para os superpoderes do superadmin. Segredo criptografado com `SECRETS_KEY`, código não reutilizável e 10 códigos de recuperação de uso único (guardados como hash). Login por dispositivo novo gera e-mail de aviso.
 - **Multi-tenant**: `SessionGuard` valida a empresa do header contra os vínculos do usuário; todo acesso a dados filtra por `organizationId`. Testes e2e cobrem o isolamento.
 - **Permissões** (`common/permissions.ts`) espelham `web/src/lib/permissions.ts`; a API é quem barra de verdade.
 - **CSRF**: cookie `SameSite=Lax` + rejeição de `POST/PUT/PATCH/DELETE` com `Origin` fora de `WEB_ORIGINS`.
@@ -67,7 +68,14 @@ Cada operador tem o seu turno de caixa (`CashSession`): abre com o fundo de troc
 
 ## Imagens enviadas
 
-`POST /uploads/image` aceita PNG, JPG e WebP até 2 MB. O tipo é conferido pelos primeiros bytes do arquivo (não pelo nome nem pelo tipo informado), o nome gravado é aleatório e os arquivos ficam em `UPLOAD_DIR` (padrão `server/uploads`), servidos em `/uploads/<empresa>/<arquivo>` sem listagem de pasta e com `nosniff`. O link é público, mas não adivinhável. **Em produção use armazenamento de objetos (S3 ou similar)**: o disco local é apagado a cada novo deploy em muitas hospedagens.
+`POST /uploads/image` aceita PNG, JPG e WebP até 2 MB. O tipo é conferido pelos primeiros bytes do arquivo (não pelo nome nem pelo tipo informado), o nome gravado é aleatório e os arquivos ficam em `UPLOAD_DIR` (padrão `server/uploads`), servidos em `/uploads/<empresa>/<arquivo>` sem listagem de pasta e com `nosniff`. O link é público, mas não adivinhável. Com `S3_BUCKET` definido, os arquivos vão para S3 (ou Cloudflare R2/MinIO via `S3_ENDPOINT`) — **use isso em produção**: o disco local é apagado a cada novo deploy em muitas hospedagens. O espaço usado fica em `Organization.storageBytes` e o envio é recusado (413) quando passa da cota do plano.
+
+## Deploy e escala
+
+- **Imagens**: `docker build -t gestor-api .` (API, usuário sem privilégios, healthcheck) e `docker build --target migrate -t gestor-migrate .` (roda `prisma migrate deploy`; execute antes de subir a nova versão). O frontend tem o próprio `Dockerfile` em `web/`.
+- **Saúde**: `GET /health/live` (processo no ar, sem banco — para liveness) e `GET /health` (banco acessível — para readiness/balanceador).
+- **Logs**: JSON em produção (`LOG_FORMAT`), uma linha por requisição com `requestId`, método, rota, status e duração. O `X-Request-Id` do balanceador é reaproveitado ou gerado, devolvido na resposta e incluído nos erros 5xx.
+- **Várias instâncias**: defina `REDIS_URL` (limite de requisições compartilhado) e `S3_BUCKET` (arquivos). Os jobs agendados (contas vencidas, caixas esquecidos, autorização de notas) usam uma concessão no Postgres (`JobLease`): todas as instâncias agendam, só uma executa por ciclo. Notas fiscais pendentes ficam no banco e são autorizadas por qualquer instância, inclusive depois de um restart. Sem Redis/S3, rode uma instância só (a API avisa no log).
 
 ## Mensagens de erro
 
@@ -75,7 +83,7 @@ Erros de validação saem em português, com o nome do campo como aparece no for
 
 ## Convites e e-mail
 
-Convite e "esqueci a senha" geram um token de uso único (guardado como hash). Sem `SMTP_*` configurado, o e-mail (com o link) aparece apenas no log da API — útil em desenvolvimento. Aceitar convite = definir a senha pela tela `/reset-password` (o token de convite também ativa o vínculo).
+Convite e "esqueci a senha" geram um token de uso único (guardado como hash). Os e-mails saem pelo SendGrid quando `SENDGRID_API_KEY` está definido (com `MAIL_FROM` igual a um Sender verificado); senão por `SMTP_*`. Sem nenhum dos dois, o e-mail (com o link) aparece apenas no log da API — útil em desenvolvimento. Depois de uma redefinição, o usuário recebe um aviso de que a senha foi alterada. Aceitar convite = definir a senha pela tela `/reset-password` (o token de convite também ativa o vínculo).
 
 ## Financeiro, carteira e o que a venda dispara
 

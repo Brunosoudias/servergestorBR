@@ -6,10 +6,11 @@ import { AppModule } from "../src/app.module";
 import { loadEnv } from "../src/config/env";
 import { configureApp } from "../src/main";
 import { MailService } from "../src/mail/mail.service";
+import { mailMock } from "./helpers";
 import { PosService } from "../src/pos/pos.service";
 import { PrismaService } from "../src/prisma/prisma.service";
 
-const PASSWORD = "Senha1234";
+const PASSWORD = "Senha@1234";
 const uniq = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 type Client = { get: (u: string) => request.Test; post: (u: string) => request.Test; put: (u: string) => request.Test };
 
@@ -20,7 +21,7 @@ describe("PDV: regras de caixa e de venda (e2e)", () => {
 
   beforeAll(async () => {
     const mod = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(MailService).useValue({ passwordReset: async () => undefined, invite: async () => undefined, send: async () => undefined })
+      .overrideProvider(MailService).useValue(mailMock())
       .compile();
     app = mod.createNestApplication();
     configureApp(app as never, loadEnv());
@@ -218,6 +219,18 @@ describe("PDV: regras de caixa e de venda (e2e)", () => {
     const ok = (await sell(cx.c, p.id, [{ method: "pix", amount: 90 }], { discount: 10, authorizationId: a.authorizationId }).expect(201)).body;
     expect((await prisma.sale.findUniqueOrThrow({ where: { id: ok.id } })).approvedById).toBeTruthy();
     await sell(cx.c, p.id, [{ method: "pix", amount: 90 }], { discount: 10, authorizationId: a.authorizationId }).expect(403);
+  });
+
+  it("autorização do supervisor: não testa senha de quem é de outra empresa e bloqueia após 5 senhas erradas", async () => {
+    const { orgId, email } = await signup();
+    const outsider = await signup();
+    const cx = await asRole(orgId, "caixa");
+    await cx.c.post("/pos/authorize").send({ email: outsider.email, password: PASSWORD, action: "discount" }).expect(403);
+    expect((await prisma.user.findUniqueOrThrow({ where: { email: outsider.email } })).failedAttempts).toBe(0);
+
+    for (let i = 0; i < 5; i++) await cx.c.post("/pos/authorize").send({ email, password: "Errada123", action: "discount" }).expect(403);
+    await cx.c.post("/pos/authorize").send({ email, password: PASSWORD, action: "discount" }).expect(429);
+    await request(server()).post("/auth/login").send({ email, password: PASSWORD }).expect(429);
   });
 
   it("idempotência: repetir a mesma venda (clique duplo) não duplica nem baixa estoque duas vezes", async () => {

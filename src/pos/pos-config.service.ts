@@ -1,10 +1,10 @@
-import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
+import { BadRequestException, ConflictException, ForbiddenException, HttpException, HttpStatus, Injectable, NotFoundException } from "@nestjs/common";
 import { Transform, Type } from "class-transformer";
 import { ArrayMaxSize, IsArray, IsBoolean, IsEmail, IsIn, IsInt, IsNumber, IsObject, IsOptional, IsString, Max, MaxLength, Min, MinLength, ValidateIf } from "class-validator";
 import { type PaymentMethod, Prisma } from "@prisma/client";
-import * as bcrypt from "bcryptjs";
 import { AuditService } from "../audit/audit.service";
 import { type AuthContext, orgOf } from "../common/auth-context";
+import { clearFailures, isLocked, passwordMatches, registerFailure } from "../common/login-attempts";
 import { num } from "../common/money";
 import { permissionsOf, type RoleName } from "../common/permissions";
 import { FinanceService, PAYMENT_LABEL } from "../finance/finance.service";
@@ -193,12 +193,19 @@ export class PosConfigService {
   async authorize(ctx: AuthContext, dto: AuthorizeDto, ip: string) {
     const orgId = orgOf(ctx);
     const denied = () => new ForbiddenException("E-mail ou senha do supervisor inválidos, ou ele não tem permissão para autorizar esta ação.");
-    const user = await this.prisma.user.findUnique({ where: { email: dto.email.toLowerCase() } });
-    if (!user?.passwordHash || (user.lockedUntil && user.lockedUntil > new Date())) throw denied();
-    if (!(await bcrypt.compare(dto.password, user.passwordHash))) throw denied();
+    const m = await this.prisma.membership.findFirst({ where: { organizationId: orgId, status: "ativo", user: { email: dto.email.toLowerCase() } }, include: { user: true } });
+    const user = m?.user;
+    if (isLocked(user)) throw new HttpException("Muitas tentativas incorretas para este supervisor. Tente novamente em alguns minutos.", HttpStatus.TOO_MANY_REQUESTS);
+    if (!(await passwordMatches(user, dto.password)) || !m || !user) {
+      if (user) {
+        const failed = await registerFailure(this.prisma, user);
+        await this.audit.log({ organizationId: orgId, userId: user.id, action: "pos.authorize_failed", entity: "pos_authorization", text: `Senha de supervisor incorreta informada por ${ctx.user.name} (${failed})`, ip });
+      }
+      throw denied();
+    }
+    await clearFailures(this.prisma, user);
     if (user.id === ctx.user.id) throw new ForbiddenException("A autorização precisa ser de outro usuário (supervisor).");
-    const m = await this.prisma.membership.findFirst({ where: { userId: user.id, organizationId: orgId, status: "ativo" } });
-    if (!m || !permissionsOf(m.role, m.extraPermissions).includes(ACTION_PERMISSION[dto.action])) throw denied();
+    if (!permissionsOf(m.role, m.extraPermissions).includes(ACTION_PERMISSION[dto.action])) throw denied();
     const a = await this.prisma.posAuthorization.create({ data: { organizationId: orgId, supervisorId: user.id, requestedById: ctx.user.id, action: dto.action, expiresAt: new Date(Date.now() + AUTH_TTL_MS) } });
     await this.audit.log({ organizationId: orgId, userId: user.id, action: "pos.authorize", entity: "pos_authorization", entityId: a.id, text: `${user.name} autorizou "${dto.action}" para ${ctx.user.name}`, ip });
     return { authorizationId: a.id, supervisor: user.name.split(" ")[0], expiresAt: a.expiresAt.toISOString() };

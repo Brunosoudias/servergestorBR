@@ -4,8 +4,8 @@ import type { Response } from "express";
 import { createHash } from "crypto";
 import { ENV, type Env } from "../../config/env";
 import { PrismaService } from "../../prisma/prisma.service";
-import type { AuthedRequest } from "../auth-context";
-import { IS_PUBLIC, NO_ORG } from "../decorators";
+import { type AuthedRequest, hasSuperPowers } from "../auth-context";
+import { ALLOW_PENDING_PASSWORD, IS_PUBLIC, NO_ORG } from "../decorators";
 import { permissionsOf } from "../permissions";
 
 export const hashToken = (t: string) => createHash("sha256").update(t).digest("hex");
@@ -43,12 +43,23 @@ export class SessionGuard implements CanActivate {
       const expiresAt = new Date(Math.min(now + this.env.cookie.ttlDays * 86400000, max));
       await this.prisma.session.update({ where: { id: session.id }, data: { lastUsedAt: new Date(now), expiresAt } }).catch(() => undefined);
     }
+    if (session.user.mustChangePassword && !this.reflector.getAllAndOverride<boolean>(ALLOW_PENDING_PASSWORD, targets)) {
+      throw new ForbiddenException({ message: "Troque a senha provisória para continuar.", code: "password_change_required" });
+    }
 
-    const memberships = await this.prisma.membership.findMany({ where: { userId: session.userId, status: "ativo" }, orderBy: { createdAt: "asc" } });
+    const superAdmin = hasSuperPowers(session.user);
+    const memberships = await this.prisma.membership.findMany({
+      where: { userId: session.userId, status: "ativo", ...(superAdmin ? {} : { organization: { suspendedAt: null } }) },
+      orderBy: { createdAt: "asc" },
+    });
     const wanted = req.header("x-organization-id");
-    let membership = wanted ? memberships.find((m) => m.organizationId === wanted) : memberships[0];
+    let membership: { organizationId: string; role: string; extraPermissions: string[] } | undefined = wanted ? memberships.find((m) => m.organizationId === wanted) : memberships[0];
+    if (!membership && superAdmin) {
+      const org = await this.prisma.organization.findFirst({ where: wanted ? { id: wanted } : {}, orderBy: { createdAt: "asc" }, select: { id: true } });
+      if (org) membership = { organizationId: org.id, role: "owner", extraPermissions: [] };
+    }
     if (wanted && !membership) throw new ForbiddenException("Você não tem acesso a esta empresa.");
-    if (!membership && !noOrg) throw new ForbiddenException("Sua conta não está vinculada a nenhuma empresa ativa.");
+    if (!membership && !noOrg) throw new ForbiddenException("Sua conta não está vinculada a nenhuma empresa ativa ou o acesso da empresa está suspenso.");
 
     req.auth = {
       user: session.user,

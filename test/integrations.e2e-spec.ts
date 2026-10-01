@@ -7,11 +7,12 @@ import { ENV, loadEnv } from "../src/config/env";
 import { configureApp } from "../src/main";
 import { MailService } from "../src/mail/mail.service";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { mailMock, randomCnpj } from "./helpers";
 
 process.env.FISCAL_SANDBOX_DELAY_MS = "0";
-const PASSWORD = "Senha1234";
+const PASSWORD = "Senha@1234";
 const uniq = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
-const MAIL = { passwordReset: async () => undefined, invite: async () => undefined, send: async () => undefined };
+const MAIL = mailMock();
 
 async function boot(override?: Record<string, unknown>) {
   let b = Test.createTestingModule({ imports: [AppModule] }).overrideProvider(MailService).useValue(MAIL);
@@ -343,7 +344,7 @@ describe("Integrações frontend ↔ backend (e2e)", () => {
       await c.post("/subscription/cancel").expect(201);
       expect((await c.get("/subscription").expect(200)).body.cancelAtPeriodEnd).toBe(true);
       const fin = await asRole(c, "financeiro");
-      await fin.get("/subscription").expect(200);
+      await fin.get("/subscription").expect(403);
       await fin.post("/subscription/checkout").send({ planId: "starter" }).expect(403);
     });
   });
@@ -446,18 +447,20 @@ describe("Integrações frontend ↔ backend (e2e)", () => {
       expect((await prisma.fiscalSettings.findUniqueOrThrow({ where: { organizationId: c.orgId } })).cscTokenEnc).toBe(row.cscTokenEnc);
       await c.put("/fiscal/settings").send({ certificate: null }).expect(200).expect((r) => expect(r.body.certificate).toBeNull());
       expect((await b.get("/fiscal/settings").expect(200)).body.cscId).toBe("");
-      const vend = await asRole(c, "vendedor");
-      await vend.get("/fiscal/notes").expect(200);
-      await vend.put("/fiscal/settings").send({ regime: "real" }).expect(403);
+      const viewer = await asRole(c, "visualizador");
+      await viewer.get("/fiscal/notes").expect(200);
+      await viewer.put("/fiscal/settings").send({ regime: "real" }).expect(403);
+      await (await asRole(c, "vendedor")).get("/fiscal/notes").expect(403);
     });
   });
 
   describe("PIX", () => {
     it("configuração inicial vem da empresa; cobrança gera BR Code válido e baixa no financeiro ao pagar", async () => {
       const c = await signup();
-      await c.put("/company").send({ name: "Loja Teste", cnpj: "11.222.333/0001-81", email: "l@x.com", phone: "11999999999", city: "Sao Paulo", state: "SP" }).expect(200);
+      const cnpj = randomCnpj();
+      await c.put("/company").send({ name: "Loja Teste", cnpj, email: "l@x.com", phone: "11999999999", city: "Sao Paulo", state: "SP" }).expect(200);
       const st = (await c.get("/pix/settings").expect(200)).body;
-      expect(st).toMatchObject({ key: "11222333000181", keyType: "cnpj", merchantName: "Loja Teste", sandbox: true });
+      expect(st).toMatchObject({ key: cnpj, keyType: "cnpj", merchantName: "Loja Teste", sandbox: true });
       const ch = (await c.post("/pix/charges").send({ description: "Pedido balcão", customer: "João", amount: 150.75, expiresInMinutes: 30 }).expect(201)).body;
       expect(ch).toMatchObject({ status: "ativa", amount: 150.75, customer: "João" });
       expect(ch.payload).toMatch(/^000201/);
@@ -525,7 +528,8 @@ describe("Integrações frontend ↔ backend (e2e)", () => {
       const c = await signup();
       const r = (await c.post("/finance/receivables").send({ party: "João", description: "Venda balcão", category: "Vendas", amount: 150.75, dueDate: "2026-09-18" }).expect(201)).body;
       await c.post(`/finance/receivables/${r.id}/settle`).expect(201);
-      await c.post("/bank/import").send({ fileName: "e.ofx", content: OFX }).expect(201);
+      const today = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+      await c.post("/bank/import").send({ fileName: "e.ofx", content: OFX.replace("20260918120000", `${today}120000`) }).expect(201);
       const sum1 = (await c.get("/bank/summary").expect(200)).body;
       expect(sum1).toMatchObject({ pending: 2, suggested: 1, reconciledPct: 0 });
       const pend = (await c.get("/bank/lines?status=pendente").expect(200)).body.data;
@@ -609,9 +613,10 @@ describe("Integrações frontend ↔ backend (e2e)", () => {
       expect((await c.get("/marketplaces/orders?search=SP1001").expect(200)).body.total).toBe(1);
       const other = await signup();
       await other.post(`/marketplaces/orders/${o.id}/invoice`).expect(404);
-      const est = await asRole(c, "estoque");
-      await est.get("/marketplaces").expect(200);
-      await est.post("/marketplaces/shopee/connect").expect(403);
+      const viewer = await asRole(c, "visualizador");
+      await viewer.get("/marketplaces").expect(200);
+      await viewer.post("/marketplaces/shopee/connect").expect(403);
+      await (await asRole(c, "estoque")).get("/marketplaces").expect(403);
     });
   });
 

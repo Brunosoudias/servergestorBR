@@ -38,7 +38,7 @@ export class PixService {
     const cur = await this.prisma.pixSettings.findUnique({ where: { organizationId: orgId } });
     if (cur) return cur;
     const org = await this.prisma.organization.findUniqueOrThrow({ where: { id: orgId } });
-    return this.prisma.pixSettings.upsert({ where: { organizationId: orgId }, create: { organizationId: orgId, key: org.cnpj.replace(/\D/g, ""), keyType: "cnpj", merchantName: org.name.slice(0, 25), city: (org.city || "Sao Paulo").slice(0, 15) }, update: {} });
+    return this.prisma.pixSettings.upsert({ where: { organizationId: orgId }, create: { organizationId: orgId, key: (org.cnpj ?? "").replace(/\D/g, ""), keyType: "cnpj", merchantName: org.name.slice(0, 25), city: (org.city || "Sao Paulo").slice(0, 15) }, update: {} });
   }
   private settingsDto(s: PixSettingsRow) { return { key: s.key, keyType: s.keyType, merchantName: s.merchantName, city: s.city }; }
   async settings(ctx: AuthContext) { return { ...this.settingsDto(await this.settingsRow(orgOf(ctx))), sandbox: this.integrations.sandbox }; }

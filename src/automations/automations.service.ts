@@ -5,6 +5,7 @@ import type { Automation } from "@prisma/client";
 import { AuditService } from "../audit/audit.service";
 import { type AuthContext, orgOf } from "../common/auth-context";
 import { Auth, ClientIp, RequirePermission } from "../common/decorators";
+import { scheduleJob } from "../common/jobs";
 import { num } from "../common/money";
 import { MailService } from "../mail/mail.service";
 import { NotificationsService } from "../notifications/notifications.service";
@@ -42,16 +43,12 @@ export function conditionMatches(condition: string, e: EventPayload): boolean {
 @Injectable()
 export class AutomationsService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger("Automations");
-  private timer?: NodeJS.Timeout;
+  private stop?: () => void;
 
   constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly notifications: NotificationsService, private readonly mail: MailService) {}
 
-  onModuleInit() {
-    if (process.env.NODE_ENV === "test") return;
-    this.timer = setInterval(() => void this.scanOverdue().catch((e) => this.log.error(e)), 3_600_000);
-    this.timer.unref();
-  }
-  onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
+  onModuleInit() { this.stop = scheduleJob(this.prisma, this.log, "automations.scan-overdue", 3_600_000, () => this.scanOverdue()); }
+  onModuleDestroy() { this.stop?.(); }
 
   async list(ctx: AuthContext) { return (await this.prisma.automation.findMany({ where: { organizationId: orgOf(ctx) }, orderBy: { createdAt: "desc" } })).map(automationDto); }
 
