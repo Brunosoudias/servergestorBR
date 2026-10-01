@@ -97,6 +97,14 @@ describe("API (e2e)", () => {
       await request(server()).post("/auth/login").send({ email, password: PASSWORD }).expect(429);
     });
 
+    it("tentativas erradas em paralelo também contam uma a uma e bloqueiam a conta", async () => {
+      const { email } = await signup();
+      const results = await Promise.all(Array.from({ length: 8 }, () => request(server()).post("/auth/login").send({ email, password: "Errada123" })));
+      expect(results.every((r) => r.status === 401 || r.status === 429)).toBe(true);
+      expect((await prisma.user.findUniqueOrThrow({ where: { email } })).lockedUntil).not.toBeNull();
+      await request(server()).post("/auth/login").send({ email, password: PASSWORD }).expect(429);
+    });
+
     it("logout encerra a sessão no servidor (o cookie antigo deixa de valer) e funciona sem sessão", async () => {
       const { agent, res } = await signup();
       const oldCookie = (res.headers["set-cookie"] as unknown as string[])[0].split(";")[0];
@@ -124,10 +132,21 @@ describe("API (e2e)", () => {
     async function enableMfa(agent: request.Agent) {
       const setup = (await agent.post("/auth/mfa/setup").expect(200)).body as { secret: string; otpauthUrl: string };
       const s0 = currentStep();
-      await agent.post("/auth/mfa/enable").send({ code: wrongCode(totpAt(setup.secret, s0)) }).expect(400);
-      const enabled = await agent.post("/auth/mfa/enable").send({ code: totpAt(setup.secret, s0) }).expect(200);
+      await agent.post("/auth/mfa/enable").send({ code: wrongCode(totpAt(setup.secret, s0)), password: PASSWORD }).expect(400);
+      const enabled = await agent.post("/auth/mfa/enable").send({ code: totpAt(setup.secret, s0), password: PASSWORD }).expect(200);
       return { ...setup, s0, recoveryCodes: enabled.body.recoveryCodes as string[] };
     }
+
+    it("2FA: ativar exige a senha atual (cookie roubado não tranca o dono fora da conta)", async () => {
+      const { agent, email } = await signup();
+      const { secret } = (await agent.post("/auth/mfa/setup").expect(200)).body as { secret: string };
+      const code = totpAt(secret, currentStep());
+      await agent.post("/auth/mfa/enable").send({ code }).expect(400);
+      await agent.post("/auth/mfa/enable").send({ code, password: "Errada@123" }).expect(400);
+      const user = await prisma.user.findUniqueOrThrow({ where: { email } });
+      expect(user.mfaEnabledAt).toBeNull();
+      expect(user.failedAttempts).toBe(1);
+    });
 
     it("2FA: códigos de recuperação entram uma única vez, avisam por e-mail e podem ser regenerados", async () => {
       const { agent, email } = await signup();
@@ -171,7 +190,7 @@ describe("API (e2e)", () => {
     it("2FA: login passa a exigir o código do app, recusa código reutilizado e desativa só com senha + código", async () => {
       const { agent, email } = await signup();
       expect((await agent.get("/auth/mfa").expect(200)).body).toEqual({ enabled: false, required: false, recoveryCodesLeft: 0 });
-      await agent.post("/auth/mfa/enable").send({ code: "123456" }).expect(400);
+      await agent.post("/auth/mfa/enable").send({ code: "123456", password: PASSWORD }).expect(400);
       const { secret, otpauthUrl, s0 } = await enableMfa(agent);
       expect(otpauthUrl).toContain(`secret=${secret}`);
       expect((await agent.get("/auth/me").expect(200)).body.user.mfaEnabled).toBe(true);

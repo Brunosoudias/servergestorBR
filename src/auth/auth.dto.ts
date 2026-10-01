@@ -33,6 +33,11 @@ export class MfaCodeDto {
   @Transform(trim) @IsString() @Matches(/^\d{6}$/, { message: MFA_CODE_MSG }) code: string;
 }
 
+export class MfaEnableDto {
+  @Transform(trim) @IsString() @Matches(/^\d{6}$/, { message: MFA_CODE_MSG }) code: string;
+  @IsString({ message: "Informe a senha." }) @MinLength(1, { message: "Informe a senha." }) @MaxLength(72) password: string;
+}
+
 export class MfaDisableDto {
   @Transform(trim) @IsString() @Matches(SECOND_FACTOR_RE, { message: SECOND_FACTOR_MSG }) code: string;
   @IsString({ message: "Informe a senha." }) @MinLength(1, { message: "Informe a senha." }) @MaxLength(72) password: string;

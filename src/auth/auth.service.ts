@@ -132,7 +132,8 @@ export class AuthService {
       await this.failed(user, "Código de verificação em duas etapas incorreto", ip);
       throw new UnauthorizedException("Código de verificação inválido.");
     }
-    await this.prisma.authToken.update({ where: { id: rec.id }, data: { usedAt: new Date() } });
+    const claimed = await this.prisma.authToken.updateMany({ where: { id: rec.id, usedAt: null }, data: { usedAt: new Date() } });
+    if (claimed.count !== 1) throw new UnauthorizedException("A verificação expirou. Entre novamente com e-mail e senha.");
     return this.completeLogin(user, ua, ip);
   }
 
@@ -197,10 +198,15 @@ export class AuthService {
     return { secret, otpauthUrl: otpauthUrl(MFA_ISSUER, user.email, secret) };
   }
 
-  async mfaEnable(user: User, code: string, sessionId: string, ip: string) {
+  async mfaEnable(user: User, code: string, password: string, sessionId: string, ip: string) {
     const fresh = await this.prisma.user.findUniqueOrThrow({ where: { id: user.id } });
     if (fresh.mfaEnabledAt) throw new ConflictException("A verificação em duas etapas já está ativa.");
     if (!fresh.mfaSecretEnc) throw new BadRequestException("Gere o QR code antes de confirmar.");
+    if (isLocked(fresh)) throw this.tooMany();
+    if (!(await passwordMatches(fresh, password))) {
+      await this.failed(fresh, "Senha incorreta ao ativar a verificação em duas etapas", ip);
+      throw new BadRequestException("Senha incorreta.");
+    }
     const step = verifyTotp(decryptSecret(fresh.mfaSecretEnc, this.env.secretsKey), code, fresh.mfaLastStep);
     if (step === null) throw new BadRequestException("Código inválido. Confira o horário do celular e tente de novo.");
     await this.prisma.$transaction([
