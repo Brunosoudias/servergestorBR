@@ -466,7 +466,7 @@ describe("API (e2e)", () => {
       expect(img.message).toBe("A imagem enviada não é válida. Envie o arquivo novamente.");
       expect(JSON.stringify(img)).not.toMatch(/must be|should not|shorter than/);
       const extra = await msg({ hack: true });
-      expect(extra.message).toBe('O campo "hack" não é permitido.');
+      expect(extra.message).toBe("A solicitação contém informações não permitidas.");
     });
 
     it("JSON grande demais devolve 413 em português (não HTML nem inglês)", async () => {

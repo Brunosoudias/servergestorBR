@@ -7,14 +7,14 @@ const LABEL: Record<string, string> = {
   installments: "as parcelas", city: "a cidade", state: "a UF", address: "o endereço", segment: "o segmento", password: "a senha", token: "o link",
   amount: "o valor", reason: "o motivo", counted: "o valor contado", initial: "o valor inicial", method: "a forma de pagamento", total: "o total", items: "os itens", payments: "as formas de pagamento", customerId: "o cliente", customer: "o cliente", product: "o produto", productId: "o produto", role: "a função", status: "o status", search: "a busca", page: "a página", pageSize: "o tamanho da página",
 };
-const label = (prop: string) => LABEL[prop] ?? `o campo "${prop}"`;
+const label = (prop: string) => LABEL[prop] ?? "um dos campos";
 const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 const num = (msg: string) => msg.match(/-?\d+(?:\.\d+)?/)?.[0] ?? "";
 
 function translate(key: string, msg: string, prop: string): string {
   const l = label(prop);
   switch (key) {
-    case "isNotEmpty": return `Informe ${l}.`;
+    case "isNotEmpty": return LABEL[prop] ? `Informe ${l}.` : "Preencha todos os campos obrigatórios.";
     case "isString": return `${cap(l)} é inválido.`;
     case "maxLength": return `${cap(l)} é longo demais (máximo de ${num(msg)} caracteres).`;
     case "minLength": return `${cap(l)} é curto demais (mínimo de ${num(msg)} caracteres).`;
@@ -28,7 +28,7 @@ function translate(key: string, msg: string, prop: string): string {
     case "matches": return `${cap(l)} está em formato inválido.`;
     case "isArray": return `${cap(l)} deve ser uma lista.`;
     case "arrayMaxSize": return `${cap(l)} tem itens demais.`;
-    case "whitelistValidation": return `O campo "${prop}" não é permitido.`;
+    case "whitelistValidation": return "A solicitação contém informações não permitidas.";
     default: return `${cap(l)} é inválido.`;
   }
 }
