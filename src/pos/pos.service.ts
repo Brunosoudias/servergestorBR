@@ -5,6 +5,7 @@ import { type PaymentMethod, Prisma, type CashSession } from "@prisma/client";
 import { AuditService } from "../audit/audit.service";
 import { type AuthContext, orgOf } from "../common/auth-context";
 import { startOfDay } from "../common/dates";
+import { scheduleJob } from "../common/jobs";
 import { cents, fromCents, num } from "../common/money";
 import { ListQuery, page, skipTake } from "../common/pagination";
 import { FinanceService, PAYMENT_LABEL } from "../finance/finance.service";
@@ -111,7 +112,7 @@ const STALE_CHECK_MS = 15 * 60 * 1000;
 @Injectable()
 export class PosService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger("PDV");
-  private timer?: NodeJS.Timeout;
+  private stop?: () => void;
 
   constructor(
     private readonly prisma: PrismaService, private readonly sales: SalesService, private readonly audit: AuditService,
@@ -119,12 +120,8 @@ export class PosService implements OnModuleInit, OnModuleDestroy {
     private readonly mail: MailService,
   ) {}
 
-  onModuleInit() {
-    if (process.env.NODE_ENV === "test") return;
-    this.timer = setInterval(() => void this.checkStale().catch((e) => this.log.error(`Falha ao verificar caixas abertos: ${(e as Error).message}`)), STALE_CHECK_MS);
-    this.timer.unref();
-  }
-  onModuleDestroy() { if (this.timer) clearInterval(this.timer); }
+  onModuleInit() { this.stop = scheduleJob(this.prisma, this.log, "pos.check-stale", STALE_CHECK_MS, () => this.checkStale()); }
+  onModuleDestroy() { this.stop?.(); }
 
   private db(tx?: Prisma.TransactionClient) { return tx ?? this.prisma; }
   private manage(ctx: AuthContext) { return ctx.permissions.includes("pos:manage"); }

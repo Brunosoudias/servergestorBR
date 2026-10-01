@@ -27,6 +27,13 @@ export function loadEnv(src: NodeJS.ProcessEnv = process.env) {
       domain: src.COOKIE_DOMAIN || undefined,
       ttlDays: Number(src.SESSION_TTL_DAYS ?? 7),
     },
+    mailEnabled: bool(src.MAIL_ENABLED),
+    sendgridApiKey: src.SENDGRID_API_KEY || undefined,
+    redisUrl: src.REDIS_URL || undefined,
+    storage: src.S3_BUCKET
+      ? { driver: "s3" as const, bucket: src.S3_BUCKET, region: src.S3_REGION ?? "us-east-1", endpoint: src.S3_ENDPOINT || undefined, publicUrl: (src.S3_PUBLIC_URL ?? "").replace(/\/$/, "") || undefined, forcePathStyle: bool(src.S3_FORCE_PATH_STYLE) }
+      : { driver: "local" as const },
+    logFormat: (src.LOG_FORMAT ?? (prod ? "json" : "text")) as "json" | "text",
     smtp: src.SMTP_HOST ? { host: src.SMTP_HOST, port: Number(src.SMTP_PORT ?? 587), user: src.SMTP_USER, pass: src.SMTP_PASS } : null,
     mailFrom: src.MAIL_FROM ?? "Gestor Br <nao-responder@localhost>",
     trustProxy: bool(src.TRUST_PROXY, prod),
@@ -37,6 +44,8 @@ export function loadEnv(src: NodeJS.ProcessEnv = process.env) {
     if (!/^[0-9a-f]{64}$/i.test(cfg.secretsKey)) throw new Error("SECRETS_KEY deve ter 64 caracteres hexadecimais em produção (openssl rand -hex 32).");
     if (!cfg.cookie.secure) throw new Error("COOKIE_SECURE deve ser true em produção.");
     if (cfg.webOrigins.some((o) => o.startsWith("http://"))) throw new Error("WEB_ORIGINS deve usar https em produção.");
+    if (cfg.mailEnabled && !cfg.sendgridApiKey && !cfg.smtp) throw new Error("Com MAIL_ENABLED=true, SENDGRID_API_KEY (ou SMTP_HOST) é obrigatório em produção: sem ele os links de redefinição de senha e convite não chegam ao usuário.");
+    if (cfg.mailEnabled && /@localhost>?$/.test(cfg.mailFrom)) throw new Error("MAIL_FROM deve ser um remetente real em produção (no SendGrid, um Sender verificado).");
   }
   return cfg;
 }

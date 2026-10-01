@@ -1,7 +1,7 @@
 import { CanActivate, ExecutionContext, HttpException, HttpStatus, Injectable } from "@nestjs/common";
 import { Reflector } from "@nestjs/core";
 import { PrismaService } from "../../prisma/prisma.service";
-import type { AuthedRequest } from "../auth-context";
+import { type AuthedRequest, hasSuperPowers } from "../auth-context";
 import { ALLOW_EXPIRED, IS_PUBLIC } from "../decorators";
 import { effectiveStatus } from "../subscription-state";
 
@@ -16,7 +16,7 @@ export class SubscriptionGuard implements CanActivate {
     const targets = [ctx.getHandler(), ctx.getClass()];
     if (this.reflector.getAllAndOverride<boolean>(IS_PUBLIC, targets)) return true;
     const req = ctx.switchToHttp().getRequest<AuthedRequest>();
-    if (READ_ONLY.has(req.method) || !req.auth?.organizationId) return true;
+    if (READ_ONLY.has(req.method) || !req.auth?.organizationId || hasSuperPowers(req.auth.user)) return true;
     if (this.reflector.getAllAndOverride<boolean>(ALLOW_EXPIRED, targets)) return true;
     const org = await this.prisma.organization.findUnique({ where: { id: req.auth.organizationId }, select: { subscriptionStatus: true, trialEndsAt: true } });
     if (org && effectiveStatus(org) === "expired") {

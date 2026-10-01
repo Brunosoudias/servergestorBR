@@ -1,4 +1,4 @@
-import { BadRequestException, Body, ConflictException, Controller, Get, Inject, Injectable, Logger, Module, NotFoundException, Param, Post, Put, Query } from "@nestjs/common";
+import { BadRequestException, Body, ConflictException, Controller, Get, Inject, Injectable, Logger, Module, NotFoundException, type OnModuleDestroy, type OnModuleInit, Param, Post, Put, Query } from "@nestjs/common";
 import { Transform } from "class-transformer";
 import { IsIn, IsOptional, IsString, Matches, MaxLength, MinLength, ValidateNested } from "class-validator";
 import { Type } from "class-transformer";
@@ -9,6 +9,7 @@ import { Auth, ClientIp, RequirePermission } from "../common/decorators";
 import { buildAccessKey } from "../common/fiscal-key";
 import { num } from "../common/money";
 import { ListQuery, page, skipTake } from "../common/pagination";
+import { scheduleJob } from "../common/jobs";
 import { decryptSecret, encryptSecret } from "../common/secret";
 import { ENV, type Env } from "../config/env";
 import { IntegrationsService } from "../integrations/integrations.service";
@@ -20,6 +21,7 @@ const trim = ({ value }: { value: unknown }) => (typeof value === "string" ? val
 const TYPE_LABEL = { nfe: "NF-e", nfce: "NFC-e" } as const;
 const TYPE_KEY = { "NF-e": "nfe", "NFC-e": "nfce" } as const;
 const MASK = "••••••••";
+const AUTHORIZE_POLL_MS = 5_000;
 
 export class EmitDto {
   @Transform(trim) @IsString({ message: "Selecione a venda." }) @MinLength(1, { message: "Selecione a venda." }) @MaxLength(20) saleNumber: string;
@@ -41,9 +43,21 @@ export class FiscalSettingsDto {
 }
 
 @Injectable()
-export class FiscalService {
+export class FiscalService implements OnModuleInit, OnModuleDestroy {
   private readonly log = new Logger("Fiscal");
+  private stop?: () => void;
   constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly integrations: IntegrationsService, private readonly notifications: NotificationsService, @Inject(ENV) private readonly env: Env) {}
+
+  /** As notas pendentes ficam no banco: qualquer instância as autoriza, inclusive depois de um restart. */
+  onModuleInit() { this.stop = scheduleJob(this.prisma, this.log, "fiscal.authorize-pending", AUTHORIZE_POLL_MS, () => this.authorizePending()); }
+  onModuleDestroy() { this.stop?.(); }
+
+  private get authorizeDelayMs() { return Number(process.env.FISCAL_SANDBOX_DELAY_MS ?? 4000); }
+
+  async authorizePending() {
+    const due = await this.prisma.fiscalNote.findMany({ where: { status: "pendente", issuedAt: { lte: new Date(Date.now() - this.authorizeDelayMs) } }, select: { id: true }, orderBy: { issuedAt: "asc" }, take: 100 });
+    for (const n of due) await this.authorize(n.id).catch((e) => this.log.error(`Falha ao autorizar ${n.id}: ${(e as Error).message}`));
+  }
 
   private dto(n: FiscalNote & { sale: { number: number } }) {
     return {
@@ -91,7 +105,7 @@ export class FiscalService {
     const series = type === "nfe" ? settings.nfeSeries : settings.nfceSeries;
     const number = await this.nextNumber(orgId, type);
     const note = await this.prisma.fiscalNote.create({
-      data: { organizationId: orgId, saleId: sale.id, type, number, series, total: sale.total, customerName: sale.customer?.name ?? "", key: buildAccessKey({ cnpj: org.cnpj, model: type === "nfe" ? 55 : 65, series, number, date: new Date(), code: Math.floor(Math.random() * 1e8) }) },
+      data: { organizationId: orgId, saleId: sale.id, type, number, series, total: sale.total, customerName: sale.customer?.name ?? "", key: buildAccessKey({ cnpj: org.cnpj ?? "", model: type === "nfe" ? 55 : 65, series, number, date: new Date(), code: Math.floor(Math.random() * 1e8) }) },
       include: { sale: { select: { number: true } } },
     });
     await this.scheduleAuthorization(note.id);
@@ -122,10 +136,7 @@ export class FiscalService {
   }
 
   private async scheduleAuthorization(id: string) {
-    const delay = Number(process.env.FISCAL_SANDBOX_DELAY_MS ?? 4000);
-    const run = () => this.authorize(id).catch((e) => this.log.error(`Falha ao autorizar ${id}: ${(e as Error).message}`));
-    if (delay <= 0) return run();
-    setTimeout(() => void run(), delay).unref();
+    if (this.authorizeDelayMs <= 0) await this.authorize(id).catch((e) => this.log.error(`Falha ao autorizar ${id}: ${(e as Error).message}`));
   }
 
   async authorize(id: string) {

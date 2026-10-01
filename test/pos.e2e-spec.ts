@@ -6,9 +6,10 @@ import { AppModule } from "../src/app.module";
 import { loadEnv } from "../src/config/env";
 import { configureApp } from "../src/main";
 import { MailService } from "../src/mail/mail.service";
+import { mailMock } from "./helpers";
 import { PrismaService } from "../src/prisma/prisma.service";
 
-const PASSWORD = "Senha1234";
+const PASSWORD = "Senha@1234";
 const uniq = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 
 describe("PDV e caixa (e2e)", () => {
@@ -18,7 +19,7 @@ describe("PDV e caixa (e2e)", () => {
 
   beforeAll(async () => {
     const mod = await Test.createTestingModule({ imports: [AppModule] })
-      .overrideProvider(MailService).useValue({ passwordReset: async () => undefined, invite: async () => undefined, send: async () => undefined })
+      .overrideProvider(MailService).useValue(mailMock())
       .compile();
     app = mod.createNestApplication();
     configureApp(app as never, loadEnv());

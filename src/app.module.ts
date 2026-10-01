@@ -8,6 +8,7 @@ import { FinanceModule } from "./finance/finance.module";
 import { FiscalModule } from "./fiscal/fiscal.service";
 import { MarketplacesModule } from "./marketplaces/marketplaces.service";
 import { PixModule } from "./pix/pix.service";
+import { PlatformModule } from "./platform/platform.service";
 import { SubscriptionModule } from "./subscription/subscription.service";
 import { InsightsModule } from "./insights/insights.service";
 import { IntegrationsModule } from "./integrations/integrations.service";
@@ -19,7 +20,9 @@ import { PermissionsGuard } from "./common/guards/permissions.guard";
 import { SessionGuard } from "./common/guards/session.guard";
 import { SubscriptionGuard } from "./common/guards/subscription.guard";
 import { CompanyModule } from "./company/company.module";
+import { RedisThrottlerStorage } from "./common/redis-throttler.storage";
 import { AppConfigModule } from "./config/config.module";
+import { ENV, type Env } from "./config/env";
 import { CustomersModule } from "./customers/customers.module";
 import { HealthController } from "./health.controller";
 import { MailModule } from "./mail/mail.service";
@@ -33,9 +36,16 @@ import { UsersModule } from "./users/users.module";
 @Module({
   imports: [
     AppConfigModule, PrismaModule, AuditModule, MailModule, IntegrationsModule, NotificationsModule, AutomationsModule,
-    ThrottlerModule.forRoot({ throttlers: [{ ttl: 60_000, limit: 300 }], skipIf: () => process.env.DISABLE_THROTTLE === "1" }),
+    ThrottlerModule.forRootAsync({
+      inject: [ENV],
+      useFactory: (env: Env) => ({
+        throttlers: [{ ttl: 60_000, limit: 300 }],
+        skipIf: () => process.env.DISABLE_THROTTLE === "1",
+        storage: env.redisUrl ? new RedisThrottlerStorage(env.redisUrl) : undefined,
+      }),
+    }),
     AuthModule, CompanyModule, UsersModule, ProductsModule, CustomersModule, SalesModule, PosModule, UploadsModule,
-    FinanceModule, InventoryModule, InsightsModule, SubscriptionModule, FiscalModule, PixModule, BankModule, MarketplacesModule,
+    FinanceModule, InventoryModule, InsightsModule, SubscriptionModule, FiscalModule, PixModule, BankModule, MarketplacesModule, PlatformModule,
   ],
   controllers: [HealthController],
   providers: [

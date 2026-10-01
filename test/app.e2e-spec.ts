@@ -7,25 +7,31 @@ import { loadEnv } from "../src/config/env";
 import { configureApp } from "../src/main";
 import { MailService } from "../src/mail/mail.service";
 import { PrismaService } from "../src/prisma/prisma.service";
+import { currentStep, totpAt } from "../src/common/totp";
+import { mailMock, randomCnpjFormatted } from "./helpers";
 
-const PASSWORD = "Senha1234";
-const CNPJ = "11.222.333/0001-81";
+const PASSWORD = "Senha@1234";
 const uniq = () => `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
 
 describe("API (e2e)", () => {
   let app: INestApplication;
   let prisma: PrismaService;
   const mails: { to: string; token: string }[] = [];
+  const changed: string[] = [];
+  const devices: string[] = [];
+  const recoveryUsed: string[] = [];
   const server = () => app.getHttpServer();
 
   beforeAll(async () => {
     const mod = await Test.createTestingModule({ imports: [AppModule] })
       .overrideProvider(MailService)
-      .useValue({
+      .useValue(mailMock({
         passwordReset: async (to: string, _n: string, token: string) => { mails.push({ to, token }); },
+        passwordChanged: async (to: string) => { changed.push(to); },
         invite: async (to: string, _c: string, _i: string, token: string) => { mails.push({ to, token }); },
-        send: async () => undefined,
-      })
+        newDeviceLogin: async (to: string) => { devices.push(to); },
+        mfaRecoveryUsed: async (to: string) => { recoveryUsed.push(to); },
+      }))
       .compile();
     app = mod.createNestApplication();
     configureApp(app as never, loadEnv());
@@ -49,7 +55,8 @@ describe("API (e2e)", () => {
   const product = (o: Partial<Record<string, unknown>> = {}) => ({ name: "Mouse", sku: `SKU-${uniq()}`, price: 100, cost: 40, stock: 10, minStock: 2, ...o });
 
   it("GET /health responde ok e não exige login", async () => {
-    await request(server()).get("/health").expect(200, { status: "ok" });
+    const res = await request(server()).get("/health").expect(200);
+    expect(res.body).toMatchObject({ status: "ok", database: { latencyMs: expect.any(Number) } });
   });
 
   describe("autenticação", () => {
@@ -58,7 +65,8 @@ describe("API (e2e)", () => {
       const cookie = (res.headers["set-cookie"] as unknown as string[]).find((c) => c.startsWith("session="))!;
       expect(cookie).toMatch(/HttpOnly/i);
       expect(cookie).toMatch(/SameSite=Lax/i);
-      expect(JSON.stringify(res.body)).not.toMatch(/password|hash|token/i);
+      expect(res.body.user.mustChangePassword).toBe(false);
+      expect(JSON.stringify({ ...res.body, user: { ...res.body.user, mustChangePassword: undefined } })).not.toMatch(/password|hash|token/i);
       expect(res.body.user.role).toBe("owner");
       expect(res.body.permissions).toContain("sales:create");
       expect(res.body.organization.id).toBeTruthy();
@@ -105,10 +113,94 @@ describe("API (e2e)", () => {
       await request(server()).post("/auth/forgot-password").send({ email }).expect(200, { ok: true });
       const token = mails.filter((m) => m.to === email).pop()!.token;
       await request(server()).post("/auth/reset-password").send({ token, password: "fraca" }).expect(400);
-      await request(server()).post("/auth/reset-password").send({ token, password: "NovaSenha99" }).expect(200);
-      await request(server()).post("/auth/reset-password").send({ token, password: "OutraSenha99" }).expect(400);
+      await request(server()).post("/auth/reset-password").send({ token, password: "Nova@Senha99" }).expect(200);
+      expect(changed.filter((to) => to === email)).toHaveLength(1);
+      await request(server()).post("/auth/reset-password").send({ token, password: "Outra@Senha99" }).expect(400);
       await agent.get("/auth/me").expect(401);
-      await request(server()).post("/auth/login").send({ email, password: "NovaSenha99" }).expect(200);
+      await request(server()).post("/auth/login").send({ email, password: "Nova@Senha99" }).expect(200);
+    });
+
+    const wrongCode = (c: string) => c.slice(0, 5) + String((Number(c[5]) + 1) % 10);
+    async function enableMfa(agent: request.Agent) {
+      const setup = (await agent.post("/auth/mfa/setup").expect(200)).body as { secret: string; otpauthUrl: string };
+      const s0 = currentStep();
+      await agent.post("/auth/mfa/enable").send({ code: wrongCode(totpAt(setup.secret, s0)) }).expect(400);
+      const enabled = await agent.post("/auth/mfa/enable").send({ code: totpAt(setup.secret, s0) }).expect(200);
+      return { ...setup, s0, recoveryCodes: enabled.body.recoveryCodes as string[] };
+    }
+
+    it("2FA: códigos de recuperação entram uma única vez, avisam por e-mail e podem ser regenerados", async () => {
+      const { agent, email } = await signup();
+      const { secret, s0, recoveryCodes } = await enableMfa(agent);
+      expect(recoveryCodes).toHaveLength(10);
+      expect(new Set(recoveryCodes).size).toBe(10);
+      expect((await prisma.user.findUniqueOrThrow({ where: { email } })).mfaRecoveryCodes).not.toContain(recoveryCodes[0]);
+
+      const loginWith = async (code: string) => {
+        const { body } = await request(server()).post("/auth/login").send({ email, password: PASSWORD }).expect(200);
+        return request(server()).post("/auth/mfa/verify").send({ challenge: body.challenge, code });
+      };
+      await loginWith(recoveryCodes[0].toUpperCase()).then((r) => expect(r.status).toBe(200));
+      expect(recoveryUsed.filter((to) => to === email)).toHaveLength(1);
+      await loginWith(recoveryCodes[0]).then((r) => expect(r.status).toBe(401));
+      expect((await agent.get("/auth/mfa").expect(200)).body.recoveryCodesLeft).toBe(9);
+
+      await agent.post("/auth/mfa/recovery-codes").send({ code: wrongCode(totpAt(secret, s0 + 1)) }).expect(400);
+      const regen = await agent.post("/auth/mfa/recovery-codes").send({ code: totpAt(secret, s0 + 1) }).expect(200);
+      expect(regen.body.recoveryCodes).toHaveLength(10);
+      await loginWith(recoveryCodes[1]).then((r) => expect(r.status).toBe(401));
+      await prisma.user.update({ where: { email }, data: { failedAttempts: 0 } });
+
+      // Celular perdido: desativa com senha + código de recuperação.
+      await agent.post("/auth/mfa/disable").send({ password: PASSWORD, code: regen.body.recoveryCodes[0] }).expect(200);
+      expect((await prisma.user.findUniqueOrThrow({ where: { email } })).mfaRecoveryCodes).toEqual([]);
+    });
+
+    it("avisa por e-mail quando a conta entra por um dispositivo novo (atualizar o navegador não conta)", async () => {
+      const { email } = await signup();
+      const login = (ua: string) => request(server()).post("/auth/login").set("User-Agent", ua).send({ email, password: PASSWORD }).expect(200);
+      const sent = () => devices.filter((to) => to === email).length;
+      await login("Mozilla/5.0 (Windows NT 10.0) Chrome/140.0.1.2");
+      expect(sent()).toBe(1);
+      await login("Mozilla/5.0 (Windows NT 10.0) Chrome/141.0.3.4");
+      expect(sent()).toBe(1);
+      await login("Mozilla/5.0 (iPhone; CPU iPhone OS 18_0) Safari/605.1");
+      expect(sent()).toBe(2);
+    });
+
+    it("2FA: login passa a exigir o código do app, recusa código reutilizado e desativa só com senha + código", async () => {
+      const { agent, email } = await signup();
+      expect((await agent.get("/auth/mfa").expect(200)).body).toEqual({ enabled: false, required: false, recoveryCodesLeft: 0 });
+      await agent.post("/auth/mfa/enable").send({ code: "123456" }).expect(400);
+      const { secret, otpauthUrl, s0 } = await enableMfa(agent);
+      expect(otpauthUrl).toContain(`secret=${secret}`);
+      expect((await agent.get("/auth/me").expect(200)).body.user.mfaEnabled).toBe(true);
+
+      const fresh = request.agent(server());
+      const step1 = await fresh.post("/auth/login").send({ email, password: PASSWORD }).expect(200);
+      expect(step1.body).toEqual({ mfaRequired: true, challenge: expect.any(String) });
+      expect(step1.headers["set-cookie"]).toBeUndefined();
+      await fresh.get("/auth/me").expect(401);
+      const verify = (code: string) => fresh.post("/auth/mfa/verify").send({ challenge: step1.body.challenge, code });
+      await verify(totpAt(secret, s0)).expect(401);
+      await verify(totpAt(secret, s0 + 1)).expect(200);
+      await fresh.get("/auth/me").expect(200);
+      await verify(totpAt(secret, s0 + 1)).expect(401);
+
+      await prisma.user.update({ where: { email }, data: { mfaLastStep: 0 } });
+      await fresh.post("/auth/mfa/disable").send({ password: "Errada123", code: totpAt(secret, s0) }).expect(400);
+      await fresh.post("/auth/mfa/disable").send({ password: PASSWORD, code: totpAt(secret, s0) }).expect(200);
+      await request(server()).post("/auth/login").send({ email, password: PASSWORD }).expect(200);
+    });
+
+    it("2FA: 5 códigos errados bloqueiam a conta, e acertar a senha de novo não zera o contador", async () => {
+      const { agent, email } = await signup();
+      const { secret, s0 } = await enableMfa(agent);
+      for (let i = 0; i < 5; i++) {
+        const { body } = await request(server()).post("/auth/login").send({ email, password: PASSWORD }).expect(200);
+        await request(server()).post("/auth/mfa/verify").send({ challenge: body.challenge, code: wrongCode(totpAt(secret, s0 + 1)) }).expect(401);
+      }
+      await request(server()).post("/auth/login").send({ email, password: PASSWORD }).expect(429);
     });
 
     it("bloqueia requisições que alteram dados vindas de origem não permitida (CSRF)", async () => {
@@ -120,6 +212,7 @@ describe("API (e2e)", () => {
   describe("empresa", () => {
     it("onboarding completa a empresa provisória (não cria outra) e valida CNPJ", async () => {
       const { agent, orgId } = await signup();
+      const CNPJ = randomCnpjFormatted();
       const body = { name: "Minha Loja", cnpj: CNPJ, email: "loja@teste.com", phone: "(11) 3000-1000", city: "São Paulo", state: "sp" };
       await agent.post("/company").send({ ...body, cnpj: "11.222.333/0001-82" }).expect(400);
       const ok = await agent.post("/company").send(body).expect(201);
@@ -130,6 +223,36 @@ describe("API (e2e)", () => {
       expect(me.body.organizations).toHaveLength(1);
       const audit = await agent.get("/company/audit").expect(200);
       expect(audit.body.length).toBeGreaterThan(0);
+    });
+
+    it("depois do onboarding não abre outra empresa (sem novo período de teste) e o CNPJ é único", async () => {
+      const a = await signup();
+      const CNPJ = randomCnpjFormatted();
+      const body = { name: "Loja A", cnpj: CNPJ, email: "a@teste.com", phone: "11999999999", city: "São Paulo", state: "SP" };
+      await a.agent.post("/company").send(body).expect(201);
+      await a.agent.post("/company").send({ ...body, cnpj: randomCnpjFormatted() }).expect(403);
+      expect((await a.agent.get("/auth/me").expect(200)).body.organizations).toHaveLength(1);
+
+      const b = await signup();
+      await b.agent.post("/company").send({ ...body, name: "Loja B" }).expect(409);
+      await b.agent.post("/company").send({ ...body, name: "Loja B", cnpj: randomCnpjFormatted() }).expect(201);
+      await withOrg(b.agent, b.orgId).put("/company").send({ ...body, name: "Loja B" }).expect(409);
+    });
+
+    it("CNPJ é único também no banco: requisições simultâneas não duplicam", async () => {
+      const [a, b] = await Promise.all([signup(), signup()]);
+      const body = { name: "Loja", cnpj: randomCnpjFormatted(), email: "x@teste.com", phone: "11999999999", city: "São Paulo", state: "SP" };
+      const statuses = (await Promise.all([a.agent.post("/company").send(body), b.agent.post("/company").send(body)])).map((r) => r.status).sort();
+      expect(statuses).toEqual([201, 409]);
+      expect(await prisma.organization.count({ where: { cnpj: body.cnpj } })).toBe(1);
+    });
+
+    it("usuário de empresa suspensa não contorna a suspensão criando outra empresa", async () => {
+      const a = await signup();
+      await a.agent.post("/company").send({ name: "Loja", cnpj: randomCnpjFormatted(), email: "a@teste.com", phone: "11999999999", city: "São Paulo", state: "SP" }).expect(201);
+      await prisma.organization.update({ where: { id: a.orgId }, data: { suspendedAt: new Date() } });
+      await a.agent.post("/company").send({ name: "Outra", cnpj: randomCnpjFormatted(), email: "b@teste.com", phone: "11999999999", city: "São Paulo", state: "SP" }).expect(403);
+      expect(await prisma.membership.count({ where: { user: { email: a.email } } })).toBe(1);
     });
   });
 
@@ -160,6 +283,32 @@ describe("API (e2e)", () => {
       await o.put(`/users/${id}`).send({}).expect(404);
       await owner.agent.patch(`/users/${id}`).set("X-Organization-Id", owner.orgId).send({ status: "inativo" }).expect(200);
       await viewer.get("/auth/me").expect(401);
+    });
+
+    it("convidar a conta de outra empresa não permite trocar a senha/nome dela nem derrubar suas sessões (tomada de conta)", async () => {
+      const victim = await signup();
+      const attacker = await signup();
+      const a = withOrg(attacker.agent, attacker.orgId);
+      const inv = await a.post("/users/invite").send({ email: victim.email, role: "vendedor" }).expect(201);
+      const patch = (body: object) => attacker.agent.patch(`/users/${inv.body.id}`).set("X-Organization-Id", attacker.orgId).send(body);
+      await patch({ password: "Invadido@123" }).expect(403);
+      await patch({ name: "Hacker" }).expect(403);
+      await patch({ status: "inativo" }).expect(200);
+      await victim.agent.get("/auth/me").expect(200);
+      await request(server()).post("/auth/login").send({ email: victim.email, password: "Invadido@123" }).expect(401);
+      await request(server()).post("/auth/login").send({ email: victim.email, password: PASSWORD }).expect(200);
+
+      const rootEmail = `root${uniq()}@teste.com`;
+      await prisma.user.create({ data: { name: "Root", email: rootEmail, passwordHash: await bcrypt.hash(PASSWORD, 4), isSuperAdmin: true } });
+      await a.post("/users/invite").send({ email: rootEmail, role: "vendedor" }).expect(400);
+    });
+
+    it("a empresa dona exclusiva da conta continua podendo redefinir a senha do próprio funcionário", async () => {
+      const owner = await signup();
+      const email = `func${uniq()}@teste.com`;
+      const created = await withOrg(owner.agent, owner.orgId).post("/users").send({ name: "Funcionário", email, password: PASSWORD, role: "caixa" }).expect(201);
+      await owner.agent.patch(`/users/${created.body.id}`).set("X-Organization-Id", owner.orgId).send({ password: "Nova@Senha99" }).expect(200);
+      await request(server()).post("/auth/login").send({ email, password: "Nova@Senha99" }).expect(200);
     });
   });
 
@@ -292,7 +441,7 @@ describe("API (e2e)", () => {
       const msg = async (body: Record<string, unknown>) => (await o.post("/products").send(product(body)).expect(400)).body;
       expect((await msg({ name: "x".repeat(200) })).message).toBe("O nome é longo demais (máximo de 160 caracteres).");
       expect((await msg({ price: "abc" })).message).toBe("O preço de venda deve ser um número.");
-      expect((await msg({ stock: 1.5 })).message).toBe("O estoque deve ser um número inteiro.");
+      expect((await msg({ stock: -1 })).message).toBe("O estoque deve ser no mínimo 0.");
       expect((await msg({ price: -5 })).message).toBe("O preço de venda deve ser no mínimo 0.");
       const img = await msg({ image: "data:image/png;base64," + "A".repeat(600) });
       expect(img.message).toBe("A imagem enviada não é válida. Envie o arquivo novamente.");

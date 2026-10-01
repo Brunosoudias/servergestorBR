@@ -1,36 +1,22 @@
-import { Body, Controller, Get, Inject, Injectable, Module, Post } from "@nestjs/common";
+import { Body, Controller, Get, Injectable, Module, Post } from "@nestjs/common";
 import { IsIn } from "class-validator";
-import { readdir, stat } from "fs/promises";
-import { join } from "path";
 import { AuditService } from "../audit/audit.service";
 import { type AuthContext, orgOf } from "../common/auth-context";
 import { AllowExpired, Auth, ClientIp, RequirePermission } from "../common/decorators";
+import { PLAN_LIMITS, type PlanId } from "../common/plans";
 import { effectiveStatus, trialDaysLeft } from "../common/subscription-state";
-import { ENV, type Env } from "../config/env";
 import { IntegrationsService } from "../integrations/integrations.service";
 import { PrismaService } from "../prisma/prisma.service";
+import { StorageService } from "../uploads/storage.service";
 
-export const PLAN_LIMITS = {
-  starter: { users: 2, products: 500, customers: 1000, storageGb: 2 },
-  professional: { users: 10, products: 10_000, customers: 20_000, storageGb: 20 },
-  business: { users: null, products: null, customers: null, storageGb: 200 },
-} as const;
-export type PlanId = keyof typeof PLAN_LIMITS;
+export { PLAN_LIMITS, type PlanId };
 export const TRIAL_DAYS = 14;
 
 export class CheckoutDto { @IsIn(Object.keys(PLAN_LIMITS), { message: "Plano inválido." }) planId: PlanId; }
 
-async function dirSize(dir: string): Promise<number> {
-  try {
-    let total = 0;
-    for (const e of await readdir(dir, { withFileTypes: true })) total += e.isDirectory() ? await dirSize(join(dir, e.name)) : (await stat(join(dir, e.name))).size;
-    return total;
-  } catch { return 0; }
-}
-
 @Injectable()
 export class SubscriptionService {
-  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly integrations: IntegrationsService, @Inject(ENV) private readonly env: Env) {}
+  constructor(private readonly prisma: PrismaService, private readonly audit: AuditService, private readonly integrations: IntegrationsService, private readonly storage: StorageService) {}
 
   async current(ctx: AuthContext) {
     const orgId = orgOf(ctx);
@@ -39,7 +25,7 @@ export class SubscriptionService {
       this.prisma.membership.count({ where: { organizationId: orgId, status: { not: "inativo" } } }),
       this.prisma.product.count({ where: { organizationId: orgId, deletedAt: null } }),
       this.prisma.customer.count({ where: { organizationId: orgId, deletedAt: null } }),
-      dirSize(join(this.env.uploadDir, orgId)),
+      this.storage.usedBytes(orgId),
     ]);
     const lim = PLAN_LIMITS[org.plan];
     return {

@@ -1,4 +1,5 @@
 import { Body, Controller, Get, HttpCode, Param, Post, Put, Query } from "@nestjs/common";
+import { Throttle } from "@nestjs/throttler";
 import type { AuthContext } from "../common/auth-context";
 import { Auth, ClientIp, RequirePermission } from "../common/decorators";
 import { ListQuery } from "../common/pagination";
@@ -58,7 +59,7 @@ export class PosController {
   @RequirePermission("pos:manage") @HttpCode(200) @Post("sessions/:id/close")
   forceClose(@Auth() ctx: AuthContext, @Param("id") id: string, @Body() dto: ForceCloseDto, @ClientIp() ip: string) { return this.pos.forceClose(ctx, id, dto, ip); }
 
-  @RequirePermission("pos:view") @HttpCode(201) @Post("authorize")
+  @RequirePermission("pos:view") @Throttle({ default: { limit: 10, ttl: 60_000 } }) @HttpCode(201) @Post("authorize")
   authorize(@Auth() ctx: AuthContext, @Body() dto: AuthorizeDto, @ClientIp() ip: string) { return this.config.authorize(ctx, dto, ip); }
 
   @RequirePermission("pos:view") @HttpCode(201) @Post("events")
