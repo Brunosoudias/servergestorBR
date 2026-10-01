@@ -40,7 +40,7 @@ import { UsersModule } from "./users/users.module";
       inject: [ENV],
       useFactory: (env: Env) => ({
         throttlers: [{ ttl: 60_000, limit: 300 }],
-        skipIf: () => process.env.DISABLE_THROTTLE === "1",
+        skipIf: () => !env.prod && process.env.DISABLE_THROTTLE === "1",
         storage: env.redisUrl ? new RedisThrottlerStorage(env.redisUrl) : undefined,
       }),
     }),

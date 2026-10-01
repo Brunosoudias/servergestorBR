@@ -44,7 +44,7 @@ export class PosController {
   @RequirePermission("pos:view") @Get("customers/:id/credit")
   customerCredit(@Auth() ctx: AuthContext, @Param("id") id: string) { return this.returns.customerCredit(ctx, id); }
 
-  @RequirePermission("pos:history") @HttpCode(200) @Post("sales/:id/receipt")
+  @RequirePermission("pos:history") @Throttle({ default: { limit: 5, ttl: 60_000 } }) @HttpCode(200) @Post("sales/:id/receipt")
   sendReceipt(@Auth() ctx: AuthContext, @Param("id") id: string, @Body() dto: ReceiptEmailDto) { return this.pos.sendReceipt(ctx, id, dto); }
 
   @RequirePermission("pos:history") @Get("reports/period")

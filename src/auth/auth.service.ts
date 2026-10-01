@@ -269,14 +269,16 @@ export class AuthService {
     const rec = await this.prisma.authToken.findUnique({ where: { tokenHash: hashToken(token) } });
     if (!rec || rec.type === "mfa_challenge" || rec.usedAt || rec.expiresAt < new Date()) throw new BadRequestException("Link inválido ou expirado. Solicite um novo.");
     const passwordHash = await bcrypt.hash(password, BCRYPT_COST);
-    const [user] = await this.prisma.$transaction([
-      this.prisma.user.update({ where: { id: rec.userId }, data: { passwordHash, mustChangePassword: false, failedAttempts: 0, lockedUntil: null }, select: { email: true, name: true } }),
-      this.prisma.authToken.update({ where: { id: rec.id }, data: { usedAt: new Date() } }),
-      this.prisma.session.deleteMany({ where: { userId: rec.userId } }),
-      ...(rec.type === "invite" && rec.organizationId
-        ? [this.prisma.membership.updateMany({ where: { userId: rec.userId, organizationId: rec.organizationId, status: "convidado" }, data: { status: "ativo" } })]
-        : []),
-    ]);
+    const user = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.authToken.updateMany({ where: { id: rec.id, usedAt: null }, data: { usedAt: new Date() } });
+      if (claimed.count === 0) throw new BadRequestException("Link inválido ou expirado. Solicite um novo.");
+      const u = await tx.user.update({ where: { id: rec.userId }, data: { passwordHash, mustChangePassword: false, failedAttempts: 0, lockedUntil: null }, select: { email: true, name: true } });
+      await tx.session.deleteMany({ where: { userId: rec.userId } });
+      if (rec.type === "invite" && rec.organizationId) {
+        await tx.membership.updateMany({ where: { userId: rec.userId, organizationId: rec.organizationId, status: "convidado" }, data: { status: "ativo" } });
+      }
+      return u;
+    });
     await this.audit.log({ organizationId: rec.organizationId, userId: rec.userId, action: rec.type === "invite" ? "auth.invite_accepted" : "auth.password_reset", text: rec.type === "invite" ? "Convite aceito e senha definida" : "Senha redefinida" });
     if (rec.type === "password_reset") await this.mail.passwordChanged(user.email, user.name);
     return { ok: true };

@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException, type OnModuleDestroy, type OnModuleInit } from "@nestjs/common";
 import { Transform, Type } from "class-transformer";
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateNested } from "class-validator";
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsEmail, IsIn, IsInt, IsNumber, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from "class-validator";
 import { type PaymentMethod, Prisma, type CashSession } from "@prisma/client";
 import { AuditService } from "../audit/audit.service";
 import { type AuthContext, orgOf } from "../common/auth-context";
@@ -80,7 +80,7 @@ export class CancelPosSaleDto {
   @IsOptional() @IsString() @MaxLength(40) authorizationId?: string;
 }
 export class ReceiptEmailDto {
-  @IsOptional() @Transform(trim) @IsString() @MaxLength(160) email?: string;
+  @IsOptional() @Transform(trim) @ValidateIf((o: { email?: string }) => !!o.email) @IsEmail({}, { message: "E-mail inválido." }) @MaxLength(160) email?: string;
 }
 export class PosEventDto {
   @IsIn(["item_removed", "cart_cleared"], { message: "Evento inválido." }) type: "item_removed" | "cart_cleared";

@@ -124,6 +124,10 @@ export class UsersService {
     if (input.extraPermissions) {
       const unknown = unknownPermissions(input.extraPermissions);
       if (unknown.length) throw new BadRequestException("Há uma permissão inválida na lista.");
+      const added = input.extraPermissions.filter((p) => !member.extraPermissions.includes(p));
+      if (ctx.role !== "owner" && added.some((p) => !ctx.permissions.includes(p) || p.startsWith("settings:"))) {
+        throw new ForbiddenException("Você só pode conceder permissões que você mesmo tem. Permissões de configurações são concedidas pelo superadmin.");
+      }
     }
     if (member.status === "inativo" && input.status === "ativo") await this.assertSeat(orgId);
 
