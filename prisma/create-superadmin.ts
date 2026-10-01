@@ -25,10 +25,13 @@ async function main() {
   const passwordHash = await bcrypt.hash(password, 12);
   const user = await prisma.user.upsert({
     where: { email },
-    update: { isSuperAdmin: true, passwordHash, failedAttempts: 0, lockedUntil: null },
+    update: { isSuperAdmin: true, passwordHash, mustChangePassword: false, failedAttempts: 0, lockedUntil: null },
     create: { email, name, passwordHash, isSuperAdmin: true },
     include: { memberships: true },
   });
+  // Sessões abertas antes da promoção/troca de senha não podem herdar os poderes de superadmin.
+  const { count: ended } = await prisma.session.deleteMany({ where: { userId: user.id } });
+  if (ended) console.log(`${ended} sessão(ões) aberta(s) encerrada(s).`);
 
   if (!user.memberships.length && !(await prisma.organization.count())) {
     await prisma.organization.create({

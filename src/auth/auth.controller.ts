@@ -4,7 +4,7 @@ import type { Response } from "express";
 import type { AuthContext, AuthedRequest } from "../common/auth-context";
 import { AllowExpired, AllowPendingPassword, Auth, ClientIp, NoOrg, Public } from "../common/decorators";
 import { ENV, type Env } from "../config/env";
-import { ChangePasswordDto, ForgotPasswordDto, LoginDto, MfaCodeDto, MfaDisableDto, MfaVerifyDto, RegisterDto, ResetPasswordDto } from "./auth.dto";
+import { ChangePasswordDto, ForgotPasswordDto, LoginDto, MfaCodeDto, MfaDisableDto, MfaEnableDto, MfaVerifyDto, RegisterDto, ResetPasswordDto } from "./auth.dto";
 import { AuthService, type LoginResult } from "./auth.service";
 
 @Controller("auth")
@@ -68,7 +68,7 @@ export class AuthController {
   mfaSetup(@Auth() ctx: AuthContext) { return this.auth.mfaSetup(ctx.user); }
 
   @NoOrg() @AllowExpired() @Throttle({ default: { limit: 10, ttl: 60_000 } }) @HttpCode(200) @Post("mfa/enable")
-  mfaEnable(@Auth() ctx: AuthContext, @Body() dto: MfaCodeDto, @ClientIp() ip: string) { return this.auth.mfaEnable(ctx.user, dto.code, ctx.sessionId, ip); }
+  mfaEnable(@Auth() ctx: AuthContext, @Body() dto: MfaEnableDto, @ClientIp() ip: string) { return this.auth.mfaEnable(ctx.user, dto.code, dto.password, ctx.sessionId, ip); }
 
   @NoOrg() @AllowExpired() @Throttle({ default: { limit: 5, ttl: 60_000 } }) @HttpCode(200) @Post("mfa/disable")
   mfaDisable(@Auth() ctx: AuthContext, @Body() dto: MfaDisableDto, @ClientIp() ip: string) { return this.auth.mfaDisable(ctx.user, dto.password, dto.code, ip); }

@@ -23,7 +23,7 @@ export class CreatePlatformCompanyDto extends CompanyDto {
   @IsIn(["trial", "active"], { message: "Situação inválida." }) subscriptionStatus: "trial" | "active";
   @Transform(({ value }) => (typeof value === "string" ? value.trim() : value)) @IsString() @MinLength(2, { message: "Informe o nome do administrador." }) @MaxLength(80) adminName: string;
   @Transform(({ value }) => (typeof value === "string" ? value.trim().toLowerCase() : value)) @IsEmail({}, { message: "Informe um e-mail válido para o administrador." }) @MaxLength(160) adminEmail: string;
-  @IsOptional() @IsString() @Matches(PASSWORD_RULE, { message: PASSWORD_MSG }) adminPassword?: string;
+  @IsString({ message: "Defina a senha inicial do administrador." }) @Matches(PASSWORD_RULE, { message: PASSWORD_MSG }) adminPassword: string;
 }
 
 export class UpdatePlatformCompanyDto {
@@ -72,14 +72,15 @@ export class PlatformService {
   async create(ctx: AuthContext, input: CreatePlatformCompanyDto, ip: string) {
     const cnpj = formatCnpj(input.cnpj);
     if (await this.prisma.organization.findFirst({ where: { cnpj } })) throw new ConflictException("Já existe uma empresa cadastrada com este CNPJ.");
-    const existing = await this.prisma.user.findUnique({ where: { email: input.adminEmail } });
-    if (existing?.isSuperAdmin) throw new BadRequestException("O superadmin já acessa todas as empresas. Informe outro e-mail para o administrador.");
-    if (!existing && !input.adminPassword) throw new BadRequestException("Defina a senha inicial do administrador.");
+    // Anexar uma conta já existente daria a empresa a quem controla aquele e-mail (que pode ter sido criado por terceiros).
+    if (await this.prisma.user.findUnique({ where: { email: input.adminEmail }, select: { id: true } })) {
+      throw new ConflictException("Este e-mail já tem conta no Gestor Br. Informe outro e-mail para o administrador da nova empresa.");
+    }
 
     const now = Date.now();
     const trial = input.subscriptionStatus === "trial";
     const org = await this.prisma.$transaction(async (tx) => {
-      const admin = existing ?? await tx.user.create({ data: { name: input.adminName, email: input.adminEmail, passwordHash: await bcrypt.hash(input.adminPassword!, 12), mustChangePassword: true } });
+      const admin = await tx.user.create({ data: { name: input.adminName, email: input.adminEmail, passwordHash: await bcrypt.hash(input.adminPassword, 12), mustChangePassword: true } });
       return tx.organization.create({
         data: {
           name: input.name, cnpj, email: input.email, phone: input.phone, address: input.address ?? "", city: input.city, state: input.state.toUpperCase(), segment: input.segment ?? "",

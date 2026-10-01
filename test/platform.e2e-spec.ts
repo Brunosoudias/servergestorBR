@@ -88,6 +88,8 @@ describe("Plataforma: empresas do superadmin (e2e)", () => {
     const created = (await root.post("/platform/companies").send(body).expect(201)).body;
     expect(created).toMatchObject({ name: body.name, plan: "starter", status: "active", suspended: false, users: 1, userLimit: 2, admin: { email: body.adminEmail } });
     await root.post("/platform/companies").send(companyBody({ cnpj: body.cnpj })).expect(409);
+    await root.post("/platform/companies").send(companyBody({ adminEmail: body.adminEmail })).expect(409);
+    await root.post("/platform/companies").send(companyBody({ adminPassword: undefined })).expect(400);
 
     const other = (await root.post("/platform/companies").send(companyBody()).expect(201)).body;
 

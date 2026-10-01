@@ -16,13 +16,16 @@ export async function passwordMatches(user: Pick<User, "passwordHash"> | null | 
   return ok && !!user?.passwordHash;
 }
 
-export async function registerFailure(prisma: PrismaService, user: Pick<User, "id" | "failedAttempts">) {
-  const failed = user.failedAttempts + 1;
-  await prisma.user.update({
-    where: { id: user.id },
-    data: failed >= MAX_FAILED ? { failedAttempts: 0, lockedUntil: new Date(Date.now() + LOCK_MINUTES * 60000) } : { failedAttempts: failed },
-  });
-  return failed;
+/** Incremento atômico: tentativas em paralelo não podem ler o mesmo contador e escapar do bloqueio. */
+export async function registerFailure(prisma: PrismaService, user: Pick<User, "id">) {
+  const [row] = await prisma.$queryRaw<{ failed: number }[]>`
+    UPDATE "User" u SET
+      "failedAttempts" = CASE WHEN u."failedAttempts" + 1 >= ${MAX_FAILED}::int THEN 0 ELSE u."failedAttempts" + 1 END,
+      "lockedUntil"    = CASE WHEN u."failedAttempts" + 1 >= ${MAX_FAILED}::int THEN (now() AT TIME ZONE 'UTC') + make_interval(mins => ${LOCK_MINUTES}::int) ELSE u."lockedUntil" END
+    FROM (SELECT "id", "failedAttempts" FROM "User" WHERE "id" = ${user.id} FOR UPDATE) prev
+    WHERE u."id" = prev."id"
+    RETURNING prev."failedAttempts" + 1 AS failed`;
+  return row?.failed ?? 0;
 }
 
 export async function clearFailures(prisma: PrismaService, user: Pick<User, "id" | "failedAttempts" | "lockedUntil">) {
