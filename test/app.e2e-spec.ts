@@ -3,7 +3,7 @@ import { Test } from "@nestjs/testing";
 import * as bcrypt from "bcryptjs";
 import request from "supertest";
 import { AppModule } from "../src/app.module";
-import { loadEnv } from "../src/config/env";
+import { cookieDomainProblem, loadEnv } from "../src/config/env";
 import { configureApp } from "../src/main";
 import { MailService } from "../src/mail/mail.service";
 import { PrismaService } from "../src/prisma/prisma.service";
@@ -480,6 +480,20 @@ describe("API (e2e)", () => {
       await vo.post("/sales").send({ product: p.id, qty: 1, price: 0.01, payment: "pix" }).expect(403);
       await vo.post("/sales").send({ items: [{ productId: p.id, qty: 1, price: 100 }], payment: "pix" }).expect(201);
       await o.post("/sales").send({ product: p.id, qty: 1, price: 80, payment: "pix" }).expect(201);
+
+      await vo.post("/sales").send({ product: p.id, qty: 1, discount: 10, payment: "pix" }).expect(403);
+      await prisma.posSettings.upsert({ where: { organizationId: owner.orgId }, create: { organizationId: owner.orgId, discountLimits: { vendedor: 10 } }, update: { discountLimits: { vendedor: 10 } } });
+      await vo.post("/sales").send({ items: [{ productId: p.id, qty: 2, discount: 10 }], payment: "pix" }).expect(201);
+      const over = await vo.post("/sales").send({ product: p.id, qty: 1, discount: 20, payment: "pix" }).expect(403);
+      expect(over.body.message).toContain("limite de 10,00%");
+      await o.post("/sales").send({ product: p.id, qty: 1, discount: 50, payment: "pix" }).expect(201);
+    });
+
+    it("exige COOKIE_DOMAIN quando API e front estão em hosts diferentes", () => {
+      expect(cookieDomainProblem("https://api.loja.com.br", ["https://app.loja.com.br"])).toContain("COOKIE_DOMAIN");
+      expect(cookieDomainProblem("https://api.loja.com.br", ["https://app.loja.com.br"], ".loja.com.br")).toBeNull();
+      expect(cookieDomainProblem("https://api.loja.com.br", ["https://app.outra.com"], ".loja.com.br")).toContain("COOKIE_DOMAIN");
+      expect(cookieDomainProblem("https://loja.com.br", ["https://loja.com.br"])).toBeNull();
     });
   });
 

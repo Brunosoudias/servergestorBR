@@ -7,6 +7,7 @@ import { type AuthContext, orgOf } from "../common/auth-context";
 import { todayDate } from "../common/dates";
 import { cents, fromCents, num } from "../common/money";
 import { type ListQuery, page, skipTake } from "../common/pagination";
+import { discountLimitFor } from "../common/permissions";
 import { AutomationsService } from "../automations/automations.service";
 import { FinanceService } from "../finance/finance.service";
 import { FiscalService } from "../fiscal/fiscal.service";
@@ -115,11 +116,23 @@ export class SalesService {
 
   async create(ctx: AuthContext, input: CreateSaleDto, ip: string) {
     const lines = input.items?.length ? input.items : [{ productId: input.product!, qty: input.qty!, price: input.price, discount: 0 }];
-    if (!ctx.permissions.includes("pos:price")) {
-      const ids = [...new Set(lines.filter((l) => l.price !== undefined).map((l) => l.productId))];
-      const catalog = new Map((await this.prisma.product.findMany({ where: { id: { in: ids }, organizationId: orgOf(ctx) }, select: { id: true, price: true } })).map((x) => [x.id, cents(num(x.price))]));
-      if (lines.some((l) => l.price !== undefined && catalog.has(l.productId) && Math.abs(cents(l.price) - catalog.get(l.productId)!) > 1)) {
-        throw new ForbiddenException("Você não tem permissão para alterar o preço do produto. Use o preço do cadastro.");
+    const orgId = orgOf(ctx);
+    const ids = [...new Set(lines.map((l) => l.productId))];
+    const catalog = new Map((await this.prisma.product.findMany({ where: { id: { in: ids }, organizationId: orgId }, select: { id: true, price: true } })).map((x) => [x.id, cents(num(x.price))]));
+    if (!ctx.permissions.includes("pos:price") && lines.some((l) => l.price !== undefined && catalog.has(l.productId) && Math.abs(cents(l.price) - catalog.get(l.productId)!) > 1)) {
+      throw new ForbiddenException("Você não tem permissão para alterar o preço do produto. Use o preço do cadastro.");
+    }
+    const discount = lines.reduce((a, l) => a + cents(l.discount ?? 0), 0) + cents(input.discount ?? 0);
+    const gross = lines.reduce((a, l) => a + Math.round((l.price !== undefined ? cents(l.price) : catalog.get(l.productId) ?? 0) * l.qty), 0);
+    // Desconto maior que o valor cai na validação do place() (400), não no limite da função.
+    if (discount > 0 && discount <= gross) {
+      const pct = Math.round((discount / gross) * 10000) / 100;
+      const settings = await this.prisma.posSettings.findUnique({ where: { organizationId: orgId }, select: { discountLimits: true } });
+      const limit = discountLimitFor((settings?.discountLimits as Record<string, number> | null) ?? {}, ctx.role, ctx.permissions);
+      if (pct > limit) {
+        throw new ForbiddenException(limit === 0
+          ? "Você não tem permissão para dar desconto."
+          : `Desconto de ${pct.toFixed(2).replace(".", ",")}% acima do seu limite de ${limit.toFixed(2).replace(".", ",")}%.`);
       }
     }
     return this.place(ctx, { customerId: input.customer, lines, globalDiscount: input.discount, shipping: input.shipping, origin: "manual", status: "pendente", method: input.payment, installments: input.installments }, ip);

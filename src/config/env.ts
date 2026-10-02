@@ -11,6 +11,22 @@ function ensureDotenv(src: NodeJS.ProcessEnv) {
   loadDotenv();
 }
 
+const hostOf = (url: string) => { try { return new URL(url).hostname.toLowerCase(); } catch { return ""; } };
+const covers = (domain: string, host: string) => host === domain || host.endsWith(`.${domain}`);
+
+/**
+ * O front (proxy do Next) decide o redirecionamento para o login olhando o cookie de sessão. Se a API está em outro
+ * host e o cookie não é emitido para o domínio comum, o front nunca o vê e o login entra em loop.
+ */
+export function cookieDomainProblem(apiUrl: string, webOrigins: string[], cookieDomain?: string) {
+  const api = hostOf(apiUrl);
+  const others = webOrigins.map(hostOf).filter((h) => h && h !== api);
+  if (!api || !others.length) return null;
+  const domain = cookieDomain?.replace(/^\./, "").toLowerCase();
+  if (domain && covers(domain, api) && others.every((h) => covers(domain, h))) return null;
+  return `API (${api}) e front (${others.join(", ")}) estão em hosts diferentes: defina COOKIE_DOMAIN com o domínio comum aos dois (ex.: .seudominio.com.br), senão o cookie de sessão não chega ao front e o login entra em loop.`;
+}
+
 export function loadEnv(src: NodeJS.ProcessEnv = process.env) {
   ensureDotenv(src);
   const prod = src.NODE_ENV === "production";
@@ -44,6 +60,8 @@ export function loadEnv(src: NodeJS.ProcessEnv = process.env) {
     if (!/^[0-9a-f]{64}$/i.test(cfg.secretsKey)) throw new Error("SECRETS_KEY deve ter 64 caracteres hexadecimais em produção (openssl rand -hex 32).");
     if (!cfg.cookie.secure) throw new Error("COOKIE_SECURE deve ser true em produção.");
     if (cfg.webOrigins.some((o) => o.startsWith("http://"))) throw new Error("WEB_ORIGINS deve usar https em produção.");
+    const cookieProblem = src.API_PUBLIC_URL ? cookieDomainProblem(cfg.apiUrl, cfg.webOrigins, cfg.cookie.domain) : null;
+    if (cookieProblem) throw new Error(cookieProblem);
     if (cfg.mailEnabled && !cfg.sendgridApiKey && !cfg.smtp) throw new Error("Com MAIL_ENABLED=true, SENDGRID_API_KEY (ou SMTP_HOST) é obrigatório em produção: sem ele os links de redefinição de senha e convite não chegam ao usuário.");
     if (cfg.mailEnabled && /@localhost>?$/.test(cfg.mailFrom)) throw new Error("MAIL_FROM deve ser um remetente real em produção (no SendGrid, um Sender verificado).");
   }
