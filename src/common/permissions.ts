@@ -50,6 +50,12 @@ export function onlyExtra(role: string, extra: string[]) {
   return [...new Set(extra.filter((p) => KNOWN.has(p) && !base.has(p)))];
 }
 
+/** Limite de desconto (%) da função: o configurado no PDV ou, sem configuração, 100% para quem tem pos:discount. */
+export function discountLimitFor(limits: Record<string, number>, role: string | null, permissions: string[]) {
+  if (role && typeof limits[role] === "number") return limits[role];
+  return permissions.includes("pos:discount") ? 100 : 0;
+}
+
 export function unknownPermissions(extra: string[]) {
   return extra.filter((p) => !KNOWN.has(p));
 }

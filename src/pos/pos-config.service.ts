@@ -6,7 +6,7 @@ import { AuditService } from "../audit/audit.service";
 import { type AuthContext, orgOf } from "../common/auth-context";
 import { clearFailures, isLocked, passwordMatches, registerFailure } from "../common/login-attempts";
 import { num } from "../common/money";
-import { permissionsOf, type RoleName } from "../common/permissions";
+import { discountLimitFor, permissionsOf, type RoleName } from "../common/permissions";
 import { FinanceService, PAYMENT_LABEL } from "../finance/finance.service";
 import { PrismaService } from "../prisma/prisma.service";
 
@@ -124,8 +124,7 @@ export class PosConfigService {
   }
 
   discountLimit(s: PosSettingsView, role: string | null, permissions: string[]) {
-    if (role && typeof s.discountLimits[role] === "number") return s.discountLimits[role];
-    return permissions.includes("pos:discount") ? 100 : 0;
+    return discountLimitFor(s.discountLimits, role, permissions);
   }
 
   async terminals(ctx: AuthContext) {
